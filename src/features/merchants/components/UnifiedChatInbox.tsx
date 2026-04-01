@@ -475,7 +475,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   const handleEdit = async () => {
     if (!editingId || !editText.trim()) return;
     const edited = encodeEdited(editText.trim(), new Date().toISOString());
-    await supabase.from('merchant_messages').update({ content: edited }).eq('id', editingId);
+    await supabase.from('merchant_messages').update({ body: edited } as any).eq('id', editingId);
     queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
     setEditingId(null); setEditText('');
   };
