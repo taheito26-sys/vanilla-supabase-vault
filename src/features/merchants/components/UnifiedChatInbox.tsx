@@ -338,7 +338,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   useEffect(() => {
     if (!activeRelId || !userId || !allMessages.length) return;
     const unread = allMessages.filter(m => m.relationship_id === activeRelId && m.sender_id !== userId && !m.read_at);
-    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ read_at: new Date().toISOString() }).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
+    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ is_read: true } as any).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
   }, [activeRelId, allMessages, userId, queryClient]);
 
   // ── Conversations ──────────────────────────────────────────────────────────
