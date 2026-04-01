@@ -12,7 +12,7 @@ export function ProfileGuard({ children }: { children: React.ReactNode }) {
   if (isLoading) return null;
 
   // If profile is pending admin approval
-  if (profile && profile.status === 'pending') {
+  if (profile && (profile.status === 'pending' || profile.status === 'pending_approval')) {
     return <Navigate to="/pending-approval" replace />;
   }
 
