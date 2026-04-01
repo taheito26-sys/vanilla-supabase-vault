@@ -3,11 +3,13 @@ import { supabase } from '@/integrations/supabase/client';
 
 export interface AuditLogRow {
   id: string;
-  admin_user_id: string;
+  actor_id: string;
+  admin_user_id: string; // alias for actor_id
   action: string;
   target_type: string;
   target_id: string | null;
   details: Record<string, unknown> | null;
+  reason: string | null;
   created_at: string;
 }
 
