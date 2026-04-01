@@ -65,7 +65,7 @@ export function AdminNotificationSender() {
 
         // Audit log
         await supabase.from('admin_audit_logs').insert({
-          admin_user_id: (await supabase.auth.getUser()).data.user!.id,
+          actor_id: (await supabase.auth.getUser()).data.user!.id,
           action: 'send_notification',
           target_type: 'notification',
           target_id: targetUserId,

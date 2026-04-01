@@ -31,7 +31,12 @@ export function useRelationshipMessages(relationshipId: string) {
         .eq('relationship_id', relationshipId)
         .order('created_at', { ascending: true });
       if (error) throw error;
-      return data || [];
+      return (data || []).map((m: any) => ({
+        ...m,
+        sender_id: m.sender_merchant_id,
+        content: m.body,
+        read_at: m.is_read ? m.created_at : null,
+      })) as Message[];
     },
     enabled: !!relationshipId,
   });

@@ -26,7 +26,7 @@ export function useAdminAuditLogs(search: string = '') {
       const { data, error } = await query;
       if (error) throw error;
 
-      let rows = (data ?? []) as AuditLogRow[];
+      let rows = (data ?? []).map((r: any) => ({ ...r, admin_user_id: r.actor_id })) as AuditLogRow[];
       if (search.trim()) {
         const q = search.toLowerCase();
         rows = rows.filter(r =>
