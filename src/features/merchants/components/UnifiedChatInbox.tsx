@@ -805,7 +805,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
                                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.1)', border: 'none', color: 'inherit', cursor: 'pointer' }}
                                      onClick={async () => {
                                         const viewed = `${m.content}||VIEWED||${new Date().toISOString()}||/VIEWED||`;
-                                        await supabase.from('merchant_messages').update({ content: viewed }).eq('id', m.id);
+                                        await supabase.from('merchant_messages').update({ body: viewed } as any).eq('id', m.id);
                                         queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
                                      }}
                                   >
