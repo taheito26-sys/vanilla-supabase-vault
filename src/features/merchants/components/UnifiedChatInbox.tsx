@@ -299,7 +299,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
       const { data, error } = await supabase
         .from('merchant_messages').select('*').in('relationship_id', relIds).order('created_at', { ascending: true });
       if (error) throw error;
-      return (data || []) as Message[];
+      return (data || []).map((m: any) => ({ ...m, sender_id: m.sender_merchant_id, content: m.body, read_at: m.is_read ? m.created_at : null })) as Message[];
     },
     enabled: relIds.length > 0,
     staleTime: 10_000,
