@@ -885,14 +885,14 @@ export type Database = {
             foreignKeyName: "message_reactions_message_id_fkey"
             columns: ["message_id"]
             isOneToOne: false
-            referencedRelation: "call_history_v"
+            referencedRelation: "os_messages"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "message_reactions_message_id_fkey"
             columns: ["message_id"]
             isOneToOne: false
-            referencedRelation: "os_messages"
+            referencedRelation: "call_history_v"
             referencedColumns: ["id"]
           },
         ]
@@ -1089,13 +1089,6 @@ export type Database = {
             foreignKeyName: "os_business_objects_room_id_fkey"
             columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "chat_room_summary_v"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "os_business_objects_room_id_fkey"
-            columns: ["room_id"]
-            isOneToOne: false
             referencedRelation: "os_rooms"
             referencedColumns: ["id"]
           },
@@ -1154,13 +1147,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
-          {
-            foreignKeyName: "os_messages_room_id_fkey"
-            columns: ["room_id"]
-            isOneToOne: false
-            referencedRelation: "chat_room_summary_v"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "os_messages_room_id_fkey"
             columns: ["room_id"]
@@ -1562,12 +1548,6 @@ export type Database = {
             foreignKeyName: "typing_presence_room_id_fkey"
             columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "chat_room_summary_v"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "typing_presence_room_id_fkey"
-            columns: ["room_id"]
             isOneToOne: false
             referencedRelation: "os_rooms"
             referencedColumns: ["id"]

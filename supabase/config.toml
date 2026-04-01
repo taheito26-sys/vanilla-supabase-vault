@@ -1,5 +1,16 @@
-project_id = "dozmqtzlinfqjrropipb"
+project_id = "wvjcgtteblsjxcapanov"
 
 [functions.p2p-cron]
 # schedule = "*/5 * * * *"
+verify_jwt = false
+
+[functions.p2p-scraper]
+# schedule = "*/5 * * * *"
+verify_jwt = false
+
+[functions.settlement-decisions-cron]
+# schedule = "0 0 * * *"
+verify_jwt = false
+
+[functions.apply-migrations]
 verify_jwt = false
