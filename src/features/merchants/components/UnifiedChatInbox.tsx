@@ -299,7 +299,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
       const { data, error } = await supabase
         .from('merchant_messages').select('*').in('relationship_id', relIds).order('created_at', { ascending: true });
       if (error) throw error;
-      return (data || []) as Message[];
+      return (data || []).map((m: any) => ({ ...m, sender_id: m.sender_merchant_id, content: m.body, read_at: m.is_read ? m.created_at : null })) as Message[];
     },
     enabled: relIds.length > 0,
     staleTime: 10_000,
@@ -338,7 +338,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   useEffect(() => {
     if (!activeRelId || !userId || !allMessages.length) return;
     const unread = allMessages.filter(m => m.relationship_id === activeRelId && m.sender_id !== userId && !m.read_at);
-    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ read_at: new Date().toISOString() }).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
+    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ is_read: true } as any).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
   }, [activeRelId, allMessages, userId, queryClient]);
 
   // ── Conversations ──────────────────────────────────────────────────────────
@@ -475,7 +475,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   const handleEdit = async () => {
     if (!editingId || !editText.trim()) return;
     const edited = encodeEdited(editText.trim(), new Date().toISOString());
-    await supabase.from('merchant_messages').update({ content: edited }).eq('id', editingId);
+    await supabase.from('merchant_messages').update({ body: edited } as any).eq('id', editingId);
     queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
     setEditingId(null); setEditText('');
   };
@@ -805,7 +805,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
                                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.1)', border: 'none', color: 'inherit', cursor: 'pointer' }}
                                      onClick={async () => {
                                         const viewed = `${m.content}||VIEWED||${new Date().toISOString()}||/VIEWED||`;
-                                        await supabase.from('merchant_messages').update({ content: viewed }).eq('id', m.id);
+                                        await supabase.from('merchant_messages').update({ body: viewed } as any).eq('id', m.id);
                                         queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
                                      }}
                                   >

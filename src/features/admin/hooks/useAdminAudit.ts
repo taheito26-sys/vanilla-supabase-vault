@@ -3,11 +3,13 @@ import { supabase } from '@/integrations/supabase/client';
 
 export interface AuditLogRow {
   id: string;
-  admin_user_id: string;
+  actor_id: string;
+  admin_user_id: string; // alias for actor_id
   action: string;
   target_type: string;
   target_id: string | null;
   details: Record<string, unknown> | null;
+  reason: string | null;
   created_at: string;
 }
 
@@ -24,7 +26,7 @@ export function useAdminAuditLogs(search: string = '') {
       const { data, error } = await query;
       if (error) throw error;
 
-      let rows = (data ?? []) as AuditLogRow[];
+      let rows = (data ?? []).map((r: any) => ({ ...r, admin_user_id: r.actor_id })) as AuditLogRow[];
       if (search.trim()) {
         const q = search.toLowerCase();
         rows = rows.filter(r =>
