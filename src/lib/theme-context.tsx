@@ -398,68 +398,7 @@ const PAPERWIRE: LayoutDef = {
   },
 };
 
-// ═══ SIGNAL DECK — Navy command dashboard, color-coded KPIs ═══
-const SIGNAL_DECK: LayoutDef = {
-  id: 'signal_deck', name: 'Signal Deck', desc: 'Navy command · color-coded data',
-  font: 'Inter', fontMono: 'JetBrains Mono',
-  radius: '10px', radiusSm: '8px', radiusLg: '14px',
-  shadow: '0 1px 3px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.03)',
-  swatches: ['#0d1321','#10b981','#6366f1','#f59e0b','#a855f7','#ec4899','#06b6d4','#ef4444'],
-  themes: {
-    t1: { // Emerald Signal (primary reference)
-      bg:'#0d1321', panel:'#131c2e', panel2:'#192438', panel3:'#1f2c42',
-      text:'#e0e6f0', muted:'#6b7a90', muted2:'#4e5b6e',
-      line:'rgba(255,255,255,.06)', line2:'rgba(255,255,255,.03)',
-      brand:'#10b981', brand2:'#34d399', brand3:'rgba(16,185,129,.08)',
-      good:'#10b981', bad:'#ef4444', warn:'#f59e0b',
-      sidebarBg:'#090f1a', topbarBg:'rgba(13,19,33,.98)',
-      cardBg:'#131c2e', inputBg:'rgba(255,255,255,.04)',
-      hoverCard:'rgba(16,185,129,.04)', glow:'rgba(16,185,129,.15)',
-    },
-    t2: { // Azure Signal
-      bg:'#0d1321', panel:'#131c2e', panel2:'#192438', panel3:'#1f2c42',
-      text:'#e0e6f0', muted:'#6b7a90', muted2:'#4e5b6e',
-      line:'rgba(255,255,255,.06)', line2:'rgba(255,255,255,.03)',
-      brand:'#6366f1', brand2:'#818cf8', brand3:'rgba(99,102,241,.08)',
-      good:'#10b981', bad:'#ef4444', warn:'#f59e0b',
-      sidebarBg:'#090f1a', topbarBg:'rgba(13,19,33,.98)',
-      cardBg:'#131c2e', inputBg:'rgba(255,255,255,.04)',
-      hoverCard:'rgba(99,102,241,.04)', glow:'rgba(129,140,248,.15)',
-    },
-    t3: { // Amber Signal
-      bg:'#0d1321', panel:'#131c2e', panel2:'#192438', panel3:'#1f2c42',
-      text:'#e0e6f0', muted:'#6b7a90', muted2:'#4e5b6e',
-      line:'rgba(255,255,255,.06)', line2:'rgba(255,255,255,.03)',
-      brand:'#f59e0b', brand2:'#fbbf24', brand3:'rgba(245,158,11,.08)',
-      good:'#10b981', bad:'#ef4444', warn:'#f59e0b',
-      sidebarBg:'#090f1a', topbarBg:'rgba(13,19,33,.98)',
-      cardBg:'#131c2e', inputBg:'rgba(255,255,255,.04)',
-      hoverCard:'rgba(245,158,11,.04)', glow:'rgba(251,191,36,.15)',
-    },
-    t4: { // Violet Signal
-      bg:'#0d1321', panel:'#131c2e', panel2:'#192438', panel3:'#1f2c42',
-      text:'#e0e6f0', muted:'#6b7a90', muted2:'#4e5b6e',
-      line:'rgba(255,255,255,.06)', line2:'rgba(255,255,255,.03)',
-      brand:'#a855f7', brand2:'#c084fc', brand3:'rgba(168,85,247,.08)',
-      good:'#10b981', bad:'#ef4444', warn:'#f59e0b',
-      sidebarBg:'#090f1a', topbarBg:'rgba(13,19,33,.98)',
-      cardBg:'#131c2e', inputBg:'rgba(255,255,255,.04)',
-      hoverCard:'rgba(168,85,247,.04)', glow:'rgba(192,132,252,.15)',
-    },
-    t5: { // Cyan Signal
-      bg:'#0d1321', panel:'#131c2e', panel2:'#192438', panel3:'#1f2c42',
-      text:'#e0e6f0', muted:'#6b7a90', muted2:'#4e5b6e',
-      line:'rgba(255,255,255,.06)', line2:'rgba(255,255,255,.03)',
-      brand:'#06b6d4', brand2:'#22d3ee', brand3:'rgba(6,182,212,.08)',
-      good:'#10b981', bad:'#ef4444', warn:'#f59e0b',
-      sidebarBg:'#090f1a', topbarBg:'rgba(13,19,33,.98)',
-      cardBg:'#131c2e', inputBg:'rgba(255,255,255,.04)',
-      hoverCard:'rgba(6,182,212,.04)', glow:'rgba(34,211,238,.15)',
-    },
-  },
-};
-
-export const LAYOUTS: LayoutDef[] = [FLUX, CIPHER, DARK_LEDGER, OPERATIONS_DESK, ATLAS_GRID, VELVET_MONO, PAPERWIRE, SIGNAL_DECK];
+export const LAYOUTS: LayoutDef[] = [FLUX, CIPHER, DARK_LEDGER, OPERATIONS_DESK, ATLAS_GRID, VELVET_MONO, PAPERWIRE];
 export const THEME_NAMES: Record<string, string> = { t1: 'Theme 1', t2: 'Theme 2', t3: 'Theme 3', t4: 'Theme 4', t5: 'Theme 5' };
 export const FONTS = ['Inter','JetBrains Mono','Space Grotesk','Sora','Plus Jakarta Sans','DM Sans','Outfit','Fira Code','IBM Plex Mono','Roboto','Manrope','Fraunces','Instrument Serif','Public Sans'];
 export const FONT_SIZES = [9,10,11,12,13,14];
