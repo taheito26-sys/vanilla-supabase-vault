@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 
 /**
  * Dev-only floating panel showing OAuth diagnostics.
@@ -13,12 +14,37 @@ export function AuthDiagnostics() {
     returnPath: '',
     currentPath: '',
     hasSession: '',
+    sessionUserId: '',
+    tokenRole: '',
+    tokenAud: '',
   });
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
 
-    const update = () => {
+    const decodeJwtPayload = (token?: string | null): Record<string, any> | null => {
+      if (!token) return null;
+      try {
+        const payload = token.split('.')[1];
+        if (!payload) return null;
+        const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = '='.repeat((4 - (normalized.length % 4)) % 4);
+        return JSON.parse(atob(normalized + pad));
+      } catch {
+        return null;
+      }
+    };
+
+    const update = async () => {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      const payload = decodeJwtPayload(session?.access_token);
+      const projectRef = (() => {
+        const match = String(import.meta.env.VITE_SUPABASE_URL || '').match(/^https:\/\/([a-z0-9-]+)\.supabase\.co/i);
+        return match?.[1] || '';
+      })();
+      const storageKey = projectRef ? `sb-${projectRef}-auth-token` : '';
+
       setInfo({
         supabaseUrl: import.meta.env.VITE_SUPABASE_URL || '—',
         projectId: import.meta.env.VITE_SUPABASE_PROJECT_ID || '—',
@@ -27,12 +53,17 @@ export function AuthDiagnostics() {
           : '—',
         returnPath: sessionStorage.getItem('oauth:return-path') || '—',
         currentPath: window.location.pathname + window.location.search,
-        hasSession: localStorage.getItem('sb-dozmqtzlinfqjrropipb-auth-token') ? 'Yes' : 'No',
+        hasSession: storageKey && localStorage.getItem(storageKey) ? 'Yes' : 'No',
+        sessionUserId: session?.user?.id || '—',
+        tokenRole: payload?.role || '—',
+        tokenAud: payload?.aud || '—',
       });
     };
 
-    update();
-    const id = setInterval(update, 2000);
+    void update();
+    const id = setInterval(() => {
+      void update();
+    }, 2000);
     return () => clearInterval(id);
   }, []);
 
