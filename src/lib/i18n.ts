@@ -133,12 +133,6 @@ const translations = {
   totalNet: { en: 'Total Net', ar: 'صافي الإجمالي' },
   editTrade: { en: 'Edit Trade', ar: 'تعديل الصفقة' },
   void: { en: 'VOID', ar: 'ملغاة' },
-  allMonths: { en: 'All Months', ar: 'جميع الشهور' },
-  importLedger: { en: 'Import Ledger', ar: 'استيراد السجل' },
-  thisMonth: { en: 'This Month', ar: 'هذا الشهر' },
-  lastMonth: { en: 'Last Month', ar: 'الشهر الماضي' },
-
-
 
   // ── Orders extended ──
   fifoCostBasisMargin: { en: 'FIFO cost basis · margin bar', ar: 'أساس تكلفة FIFO · شريط الهامش' },
@@ -1291,7 +1285,6 @@ const translations = {
   accTypeHand:           { en: 'Cash in Hand',                 ar: 'نقد بالجيب' },
   accTypeBank:           { en: 'Bank Account',                 ar: 'حساب بنكي' },
   accTypeVault:          { en: 'Vault / Safe',                 ar: 'خزنة / صندوق' },
-  accTypeMerchant:       { en: 'Merchant Custody',             ar: 'حفظ التاجر' },
 
   // Ledger entry types
   ledgerOpening:         { en: 'Opening Balance',              ar: 'الرصيد الافتتاحي' },
@@ -1303,15 +1296,6 @@ const translations = {
   ledgerStockRefund:     { en: 'Stock Refund',                 ar: 'استرداد مخزون' },
   ledgerEditAdjust:      { en: 'Batch Edit Adjust',            ar: 'تعديل دفعة' },
   ledgerReconcile:       { en: 'Reconciliation',               ar: 'تسوية حساب' },
-  ledgerMerchantFundingOut:    { en: 'Funding Merchant',       ar: 'تمويل التاجر' },
-  ledgerMerchantFundingReturn: { en: 'Funding Return',         ar: 'إرجاع التمويل' },
-  ledgerMerchantSaleProceeds:  { en: 'Sale Proceeds',          ar: 'عائدات البيع' },
-  ledgerMerchantSettlementIn:  { en: 'Settlement In',          ar: 'تسوية واردة' },
-  ledgerMerchantSettlementOut: { en: 'Settlement Out',         ar: 'تسوية صادرة' },
-  ledgerMerchantFee:           { en: 'Merchant Fee',           ar: 'رسوم التاجر' },
-  ledgerMerchantAdjustment:    { en: 'Merchant Adjustment',    ar: 'تعديل التاجر' },
-  fundMerchant:          { en: 'Fund',                         ar: 'تمويل' },
-  settleBack:            { en: 'Settle',                       ar: 'تسوية' },
 
   // Add / Edit account modal
   addCashAccount:        { en: '➕ Add Cash Account',          ar: '➕ إضافة حساب نقدي' },
@@ -1384,9 +1368,6 @@ const translations = {
   confirmReconcile:      { en: 'Confirm Reconcile',            ar: 'تأكيد التسوية' },
   in24h:                 { en: 'in 24h',                       ar: 'خلال 24س' },
   lastActivity:          { en: 'Last',                         ar: 'آخر' },
-  clearLedger:           { en: 'Clear Ledger',                 ar: 'حذف السجل' },
-  confirmClearLedger:    { en: 'Are you sure you want to clear the ledger for this account? This will remove ALL entries and reset the balance to zero. This action cannot be undone.', ar: 'هل أنت متأكد من حذف سجل العمليات لهذا الحساب؟ سيتم حذف جميع الحركات المالية وتصفير الرصيد. لا يمكن التراجع عن هذا الإجراء.' },
-  clearBtn:              { en: 'Clear',                        ar: 'تصفير' },
 
   // Ledger tab
   allAccountsOpt:        { en: 'All Accounts',                 ar: 'جميع الحسابات' },

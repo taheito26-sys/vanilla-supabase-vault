@@ -99,3 +99,9 @@ Implementation notes:
 - Web runtime uses web URLs (`/auth/callback`, `/reset-password`).
 - Capacitor native runtime uses deep links with the app scheme (`com.taheito26sys.corerefactorinitiative://...`).
 - Android receives those deep links via `AndroidManifest.xml` intent filters and routes back into the SPA callback routes.
+
+## Migrated Features From core-refactor-initiative
+- Advanced Dashboard KPIs (ROI, Cycle Time, Trade Velocity, Deal Networking Profit vs Cut).
+- Enhanced multi-message codec processing APIs and secured Trade Panel boundaries.
+- Re-synced core Deal Engine logics and Notification payload structs.
+- Retained Vanilla-Supabase-Vault exclusive capabilities (Ledger Imports, Auth/Permissions guards, Role banners).
