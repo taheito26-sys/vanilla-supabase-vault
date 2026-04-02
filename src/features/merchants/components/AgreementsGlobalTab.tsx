@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { useT } from '@/lib/i18n';
 import { useAuth } from '@/features/auth/auth-context';
 import { isAgreementActive } from '@/lib/deal-engine';
-import { fmtU } from '@/lib/tracker-helpers';
 import { AgreementsTab } from './AgreementsTab';
 import type { ProfitShareAgreement } from '@/types/domain';
 
@@ -126,9 +125,8 @@ export function AgreementsGlobalTab({ relationships, allAgreements, activeAgreem
                 const rel = relationships.find((r: any) => r.id === a.relationship_id);
                 const cpName = rel?.counterparty_name || '—';
                 const active = a.status === 'approved' && isAgreementActive(a);
-                const isPending = a.status === 'pending';
-                const statusCls = active ? 'good' : isPending ? 'info' : a.status === 'rejected' ? 'bad' : 'warn';
-                const statusLabel = active ? t('activeStatus') : isPending ? (t('pendingStatus' as any) || 'Pending') : a.status === 'rejected' ? t('rejectedStatus') : a.status === 'expired' ? t('expiredStatus') : t('inactiveStatus');
+                const statusCls = active ? 'good' : a.status === 'rejected' ? 'bad' : 'warn';
+                const statusLabel = active ? t('activeStatus') : a.status === 'rejected' ? t('rejectedStatus') : a.status === 'expired' ? t('expiredStatus') : t('inactiveStatus');
                 return (
                   <tr key={a.id} style={{ opacity: active ? 1 : 0.6 }}>
                     <td>
@@ -142,7 +140,7 @@ export function AgreementsGlobalTab({ relationships, allAgreements, activeAgreem
                         {(a as any).agreement_type === 'operator_priority' ? (
                           <>{t('operatorFeeFirst')} {(a as any).operator_ratio}% · {t('thenCapitalSplit')}</>
                         ) : (
-                          <>{t('partner')} {a.partner_ratio}% · {t('you')} {a.merchant_ratio}% · Capital {fmtU((a as any).invested_capital ?? 0)} · {(a as any).settlement_way ?? '—'}</>
+                          <>{t('partner')} {a.partner_ratio}% · {t('you')} {a.merchant_ratio}%</>
                         )}
                       </div>
                     </td>

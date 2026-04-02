@@ -33,17 +33,13 @@ const PALETTES = [
   { bg: 'linear-gradient(135deg,#db2777,#be185d)', text: '#fff' },
   { bg: 'linear-gradient(135deg,#2563eb,#1d4ed8)', text: '#fff' },
 ];
-function getPalette(name: string | null | undefined) {
-  const safeName = name || 'Anonymous';
-  return PALETTES[safeName.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTES.length];
+function getPalette(name: string) {
+  return PALETTES[name.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTES.length];
 }
 
 // ─── Formatters ────────────────────────────────────────────────────────────
-function fmtListTime(s: string | null | undefined) {
-  if (!s) return '—';
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return '—';
-  const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
+function fmtListTime(s: string) {
+  const d = new Date(s), diff = Math.floor((Date.now() - d.getTime()) / 86400000);
   if (diff === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (diff === 1) return 'Yesterday';
   if (diff < 7) return d.toLocaleDateString([], { weekday: 'short' });
@@ -51,10 +47,9 @@ function fmtListTime(s: string | null | undefined) {
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
-function Avatar({ name, size = 48 }: { name: string | null | undefined; size?: number }) {
-  const safeName = name || 'Anonymous';
-  const initials = safeName.split(/[\s_]+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
-  const p = getPalette(safeName);
+function Avatar({ name, size = 48 }: { name: string; size?: number }) {
+  const initials = name.split(/[\s_]+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+  const p = getPalette(name);
   return (
     <div style={{ width: size, height: size, borderRadius: '50%', background: p.bg, color: p.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: size * 0.38, flexShrink: 0, boxShadow: '0 2px 8px rgba(0,0,0,0.18)' }}>
       {initials}
@@ -299,7 +294,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
       const { data, error } = await supabase
         .from('merchant_messages').select('*').in('relationship_id', relIds).order('created_at', { ascending: true });
       if (error) throw error;
-      return (data || []).map((m: any) => ({ ...m, sender_id: m.sender_merchant_id, content: m.body, read_at: m.is_read ? m.created_at : null })) as Message[];
+      return (data || []) as Message[];
     },
     enabled: relIds.length > 0,
     staleTime: 10_000,
@@ -338,7 +333,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   useEffect(() => {
     if (!activeRelId || !userId || !allMessages.length) return;
     const unread = allMessages.filter(m => m.relationship_id === activeRelId && m.sender_id !== userId && !m.read_at);
-    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ is_read: true } as any).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
+    if (unread.length) Promise.all(unread.map(m => supabase.from('merchant_messages').update({ read_at: new Date().toISOString() }).eq('id', m.id))).then(() => queryClient.invalidateQueries({ queryKey: ['unified-chat'] }));
   }, [activeRelId, allMessages, userId, queryClient]);
 
   // ── Conversations ──────────────────────────────────────────────────────────
@@ -475,7 +470,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
   const handleEdit = async () => {
     if (!editingId || !editText.trim()) return;
     const edited = encodeEdited(editText.trim(), new Date().toISOString());
-    await supabase.from('merchant_messages').update({ body: edited } as any).eq('id', editingId);
+    await supabase.from('merchant_messages').update({ content: edited }).eq('id', editingId);
     queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
     setEditingId(null); setEditText('');
   };
@@ -805,7 +800,7 @@ export function UnifiedChatInbox({ relationships, fullPage }: Props) {
                                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.1)', border: 'none', color: 'inherit', cursor: 'pointer' }}
                                      onClick={async () => {
                                         const viewed = `${m.content}||VIEWED||${new Date().toISOString()}||/VIEWED||`;
-                                        await supabase.from('merchant_messages').update({ body: viewed } as any).eq('id', m.id);
+                                        await supabase.from('merchant_messages').update({ content: viewed }).eq('id', m.id);
                                         queryClient.invalidateQueries({ queryKey: ['unified-chat'] });
                                      }}
                                   >

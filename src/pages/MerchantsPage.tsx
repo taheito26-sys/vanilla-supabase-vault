@@ -103,8 +103,8 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
       .from('merchant_messages')
       .select('id', { count: 'exact', head: true })
       .in('relationship_id', relationshipIds)
-      .neq('sender_merchant_id', userId)
-      .eq('is_read', false)
+      .neq('sender_id', userId)
+      .is('read_at', null)
       .then(({ count }) => setUnreadChatCount(count || 0));
   }, [userId, relationships]);
 
