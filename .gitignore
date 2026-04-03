@@ -31,3 +31,6 @@ android/build
 ios/App/App/public
 ios/App/build
 ios/DerivedData
+.env
+.env.local
+.env.production
