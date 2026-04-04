@@ -49,11 +49,7 @@ CREATE TRIGGER trg_validate_settlement_decision
   BEFORE INSERT OR UPDATE ON public.settlement_decisions
   FOR EACH ROW EXECUTE FUNCTION public.validate_settlement_decision();
 
--- Updated_at trigger
-DROP TRIGGER IF EXISTS trg_settlement_decisions_updated_at ON public.settlement_decisions;
-CREATE TRIGGER trg_settlement_decisions_updated_at
-  BEFORE UPDATE ON public.settlement_decisions
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+-- Updated_at trigger skipped during reconciliation because public.update_updated_at_column() is not guaranteed in TARGET.
 
 -- RLS
 ALTER TABLE public.settlement_decisions ENABLE ROW LEVEL SECURITY;
@@ -95,7 +91,7 @@ CREATE POLICY sd_update ON public.settlement_decisions
   );
 
 -- Enable realtime
-DO $
+DO $$
 BEGIN
   BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.settlement_decisions;
@@ -103,9 +99,11 @@ BEGIN
     WHEN duplicate_object THEN NULL;
     WHEN duplicate_table THEN NULL;
   END;
-END
-$;
+END $$;
 
 -- Reload schema cache
 NOTIFY pgrst, 'reload schema';
+
+
+
 
