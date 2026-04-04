@@ -28,5 +28,5 @@ CREATE POLICY "ct_insert" ON public.capital_transfers
     AND auth.uid() = transferred_by
   );
 
-CREATE INDEX idx_ct_relationship ON public.capital_transfers(relationship_id);
-CREATE INDEX idx_ct_deal ON public.capital_transfers(deal_id);
+CREATE INDEX IF NOT EXISTS idx_ct_relationship ON public.capital_transfers(relationship_id);
+CREATE INDEX IF NOT EXISTS idx_ct_deal ON public.capital_transfers(deal_id);
