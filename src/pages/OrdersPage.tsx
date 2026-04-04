@@ -331,6 +331,11 @@ export default function OrdersPage() {
     }
   }, [allMerchantDeals, state, applyState]);
 
+  const isCreatorInMyMerchant = useCallback((creatorUserId: string) => {
+    if (merchantUserIds.length === 0) return creatorUserId === userId;
+    return merchantUserIds.includes(creatorUserId);
+  }, [merchantUserIds, userId]);
+
   const allTrades = useMemo(() => [...state.trades].sort((a, b) => b.ts - a.ts), [state.trades]);
   const list = useMemo(() => allTrades.filter(t => {
     if (!inRange(t.ts, state.range)) return false;
@@ -447,10 +452,6 @@ export default function OrdersPage() {
   }, [searchParams, activeTab, filtered.length, allMerchantDeals.length, allTransfers.length]);
 
   const isDealVisible = (d: any) => d.status !== 'cancelled' && d.status !== 'rejected' && d.status !== 'voided';
-  const isCreatorInMyMerchant = useCallback((creatorUserId: string) => {
-    if (merchantUserIds.length === 0) return creatorUserId === userId;
-    return merchantUserIds.includes(creatorUserId);
-  }, [merchantUserIds, userId]);
   // Incoming: deals created by OTHER merchants in my relationships
   const partnerMerchantDeals = useMemo(
     () => allMerchantDeals.filter(d => !isCreatorInMyMerchant(d.created_by) && isDealVisible(d)),
