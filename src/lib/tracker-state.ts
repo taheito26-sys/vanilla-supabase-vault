@@ -9,6 +9,49 @@ interface StateOverrides {
   currency?: 'QAR' | 'USDT';
 }
 
+function readTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function getStateEntityCount(state: Partial<TrackerState> | null): number {
+  if (!state) return 0;
+  return (state.trades?.length ?? 0)
+    + (state.batches?.length ?? 0)
+    + (state.customers?.length ?? 0)
+    + (state.cashAccounts?.length ?? 0)
+    + (state.cashLedger?.length ?? 0)
+    + (state.cashHistory?.length ?? 0);
+}
+
+function getLatestActivityTs(state: Partial<TrackerState> | null): number {
+  if (!state) return 0;
+
+  let latest = 0;
+  const scan = (items: unknown[] | undefined, fields: string[]) => {
+    for (const item of items || []) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      for (const field of fields) {
+        latest = Math.max(latest, readTimestamp(row[field]));
+      }
+    }
+  };
+
+  scan(state.trades, ['ts', 'updated_at', 'created_at']);
+  scan(state.batches, ['ts', 'updated_at', 'created_at']);
+  scan(state.customers, ['updated_at', 'created_at']);
+  scan(state.cashAccounts, ['updated_at', 'created_at', 'lastReconciled']);
+  scan(state.cashLedger, ['ts', 'updated_at', 'created_at']);
+  scan(state.cashHistory, ['ts', 'updated_at', 'created_at']);
+
+  return latest;
+}
+
 function asNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -60,7 +103,7 @@ export function buildStateFrom(
   return { state, derived };
 }
 
-/** Pick the richer source between local and cloud state */
+/** Pick the freshest source first, then fall back to richer state. */
 export function mergeLocalAndCloud(
   local: Partial<TrackerState> | null,
   cloud: Partial<TrackerState> | null,
@@ -69,10 +112,15 @@ export function mergeLocalAndCloud(
   if (!cloud) return local;
   if (!local) return cloud;
 
-  const localCount = (local.trades?.length ?? 0) + (local.batches?.length ?? 0) + (local.customers?.length ?? 0);
-  const cloudCount = (cloud.trades?.length ?? 0) + (cloud.batches?.length ?? 0) + (cloud.customers?.length ?? 0);
+  const localLatest = getLatestActivityTs(local);
+  const cloudLatest = getLatestActivityTs(cloud);
+  if (cloudLatest !== localLatest) {
+    return cloudLatest > localLatest ? cloud : local;
+  }
 
-  // Use whichever has more data
+  const localCount = getStateEntityCount(local);
+  const cloudCount = getStateEntityCount(cloud);
+
   return cloudCount >= localCount ? cloud : local;
 }
 
