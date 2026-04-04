@@ -40,3 +40,6 @@ caches/
 android/.gradle/
 android/app/build/
 android/build/
+supabase/.temp/
+supabase/deferred_migration_dependency_map.csv
+supabase/deferred_overlap_report.csv
