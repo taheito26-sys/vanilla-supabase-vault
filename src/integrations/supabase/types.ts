@@ -260,6 +260,168 @@ export type Database = {
           },
         ]
       }
+      ledger_import_batches: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          needs_review_count: number
+          parsed_count: number
+          skipped_count: number
+          source_file_name: string | null
+          source_type: string
+          status: string
+          total_rows: number
+          uploader_merchant_id: string
+          uploader_user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          needs_review_count?: number
+          parsed_count?: number
+          skipped_count?: number
+          source_file_name?: string | null
+          source_type: string
+          status?: string
+          total_rows?: number
+          uploader_merchant_id: string
+          uploader_user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          needs_review_count?: number
+          parsed_count?: number
+          skipped_count?: number
+          source_file_name?: string | null
+          source_type?: string
+          status?: string
+          total_rows?: number
+          uploader_merchant_id?: string
+          uploader_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_import_batches_uploader_user_id_fkey"
+            columns: ["uploader_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ledger_import_rows: {
+        Row: {
+          batch_id: string
+          confidence: number
+          computed_qar_amount: number | null
+          created_at: string
+          direction: string | null
+          id: string
+          intermediary: string | null
+          line_index: number
+          normalized_hash: string
+          normalized_text: string
+          parse_result: string | null
+          parsed_type: string
+          rate: number | null
+          raw_line: string
+          save_enabled: boolean
+          saved_to_deal_id: string | null
+          selected_merchant_id: string | null
+          selected_merchant_name: string | null
+          skip_reason: string | null
+          source_file_name: string | null
+          source_type: string
+          status: string
+          updated_at: string
+          uploader_user_id: string
+          usdt_amount: number | null
+        }
+        Insert: {
+          batch_id: string
+          confidence?: number
+          computed_qar_amount?: number | null
+          created_at?: string
+          direction?: string | null
+          id?: string
+          intermediary?: string | null
+          line_index: number
+          normalized_hash: string
+          normalized_text: string
+          parse_result?: string | null
+          parsed_type?: string
+          rate?: number | null
+          raw_line: string
+          save_enabled?: boolean
+          saved_to_deal_id?: string | null
+          selected_merchant_id?: string | null
+          selected_merchant_name?: string | null
+          skip_reason?: string | null
+          source_file_name?: string | null
+          source_type: string
+          status?: string
+          updated_at?: string
+          uploader_user_id: string
+          usdt_amount?: number | null
+        }
+        Update: {
+          batch_id?: string
+          confidence?: number
+          computed_qar_amount?: number | null
+          created_at?: string
+          direction?: string | null
+          id?: string
+          intermediary?: string | null
+          line_index?: number
+          normalized_hash?: string
+          normalized_text?: string
+          parse_result?: string | null
+          parsed_type?: string
+          rate?: number | null
+          raw_line?: string
+          save_enabled?: boolean
+          saved_to_deal_id?: string | null
+          selected_merchant_id?: string | null
+          selected_merchant_name?: string | null
+          skip_reason?: string | null
+          source_file_name?: string | null
+          source_type?: string
+          status?: string
+          updated_at?: string
+          uploader_user_id?: string
+          usdt_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_import_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "ledger_import_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_import_rows_saved_to_deal_id_fkey"
+            columns: ["saved_to_deal_id"]
+            isOneToOne: false
+            referencedRelation: "merchant_deals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_import_rows_uploader_user_id_fkey"
+            columns: ["uploader_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       merchant_approvals: {
         Row: {
           created_at: string
@@ -754,6 +916,7 @@ export type Database = {
       }
       notifications: {
         Row: {
+          actor_id: string | null
           anchor_id: string | null
           body: string | null
           category: string
@@ -764,10 +927,16 @@ export type Database = {
           id: string
           message_id: string | null
           read_at: string | null
+          target_entity_id: string | null
+          target_entity_type: string | null
+          target_focus: string | null
+          target_path: string | null
+          target_tab: string | null
           title: string
           user_id: string
         }
         Insert: {
+          actor_id?: string | null
           anchor_id?: string | null
           body?: string | null
           category?: string
@@ -778,10 +947,16 @@ export type Database = {
           id?: string
           message_id?: string | null
           read_at?: string | null
+          target_entity_id?: string | null
+          target_entity_type?: string | null
+          target_focus?: string | null
+          target_path?: string | null
+          target_tab?: string | null
           title: string
           user_id: string
         }
         Update: {
+          actor_id?: string | null
           anchor_id?: string | null
           body?: string | null
           category?: string
@@ -792,6 +967,11 @@ export type Database = {
           id?: string
           message_id?: string | null
           read_at?: string | null
+          target_entity_id?: string | null
+          target_entity_type?: string | null
+          target_focus?: string | null
+          target_path?: string | null
+          target_tab?: string | null
           title?: string
           user_id?: string
         }
@@ -1455,6 +1635,7 @@ export type Database = {
           effective_from: string
           expires_at: string | null
           id: string
+          invested_capital: number | null
           lender_contribution: number | null
           merchant_ratio: number
           notes: string | null
@@ -1465,6 +1646,7 @@ export type Database = {
           partner_ratio: number
           relationship_id: string
           settlement_cadence: string
+          settlement_way: string | null
           status: string
           terms_snapshot: Json | null
           updated_at: string
@@ -1479,6 +1661,7 @@ export type Database = {
           effective_from?: string
           expires_at?: string | null
           id?: string
+          invested_capital?: number | null
           lender_contribution?: number | null
           merchant_ratio: number
           notes?: string | null
@@ -1489,6 +1672,7 @@ export type Database = {
           partner_ratio: number
           relationship_id: string
           settlement_cadence?: string
+          settlement_way?: string | null
           status?: string
           terms_snapshot?: Json | null
           updated_at?: string
@@ -1503,6 +1687,7 @@ export type Database = {
           effective_from?: string
           expires_at?: string | null
           id?: string
+          invested_capital?: number | null
           lender_contribution?: number | null
           merchant_ratio?: number
           notes?: string | null
@@ -1513,6 +1698,7 @@ export type Database = {
           partner_ratio?: number
           relationship_id?: string
           settlement_cadence?: string
+          settlement_way?: string | null
           status?: string
           terms_snapshot?: Json | null
           updated_at?: string

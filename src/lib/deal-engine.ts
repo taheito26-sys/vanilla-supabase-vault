@@ -329,7 +329,7 @@ export function calculateOutstanding(deal: MerchantDeal): {
 } {
   const principal = deal.amount;
   const expectedReturn = deal.expected_return || 0;
-  const realizedPnl = deal.realized_pnl || 0;
+  const realizedPnl = deal.realized_pnl ?? 0;
   const outstanding = principal + expectedReturn - realizedPnl;
   const isOverdue = deal.due_date ? new Date(deal.due_date) < new Date() : false;
 

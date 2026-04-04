@@ -76,6 +76,7 @@ export default function OrdersPage() {
   const [manualBuyPrice, setManualBuyPrice] = useState('');
   const [saleFee, setSaleFee] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
+  const [isAddingTrade, setIsAddingTrade] = useState(false);
   const [cashDepositMode, setCashDepositMode] = useState<'none' | 'full' | 'partial'>('none');
   const [cashDepositAmount, setCashDepositAmount] = useState('');
   const [cashDepositAccountId, setCashDepositAccountId] = useState('');
@@ -655,6 +656,10 @@ export default function OrdersPage() {
   const addTrade = async () => {
     // Capital transfers are handled separately via handleCapitalTransfer
     if (isCapitalTransfer) return;
+    // Idempotency guard: prevent double-click / concurrent submissions
+    if (isAddingTrade) return;
+    setIsAddingTrade(true);
+    try {
 
     const ts = new Date(saleDate).getTime();
     let sell: number, amountUSDT: number;
@@ -941,7 +946,7 @@ export default function OrdersPage() {
           } as any).select('id').single();
 
           if (settleImmediately && periodData?.id) {
-            await supabase.from('merchant_settlements').insert({
+            const { data: settlementData } = await supabase.from('merchant_settlements').insert({
               deal_id: data.id,
               relationship_id: linkedRelId,
               amount: partnerAmt,
@@ -949,7 +954,15 @@ export default function OrdersPage() {
               settled_by: userId!,
               notes: `Immediate settlement for order ${baseTrade.id}`,
               status: 'pending',
-            } as any);
+            } as any).select('id').single();
+
+            if (settlementData?.id) {
+              const { error: linkErr } = await supabase
+                .from('settlement_periods')
+                .update({ settlement_id: settlementData.id })
+                .eq('id', periodData.id);
+              if (linkErr) console.error('Failed to link settlement_id to period:', linkErr);
+            }
           }
         }
 
@@ -991,6 +1004,9 @@ export default function OrdersPage() {
     setCashDepositMode('none');
     setCashDepositAmount('');
     setCashDepositAccountId('');
+    } finally {
+      setIsAddingTrade(false);
+    }
   };
 
   const exportCsv = () => {
@@ -1145,7 +1161,7 @@ export default function OrdersPage() {
           } as any).select('id').single();
 
           if (editSettleImmediately && periodData?.id) {
-            await supabase.from('merchant_settlements').insert({
+            const { data: settlementData } = await supabase.from('merchant_settlements').insert({
               deal_id: dealData.id,
               relationship_id: editLinkedRelId,
               amount: partnerAmt,
@@ -1153,7 +1169,15 @@ export default function OrdersPage() {
               settled_by: userId!,
               notes: `Immediate settlement for linked order ${editingTradeId}`,
               status: 'pending',
-            } as any);
+            } as any).select('id').single();
+
+            if (settlementData?.id) {
+              const { error: linkErr } = await supabase
+                .from('settlement_periods')
+                .update({ settlement_id: settlementData.id })
+                .eq('id', periodData.id);
+              if (linkErr) console.error('Failed to link settlement_id to period:', linkErr);
+            }
           }
         }
 
@@ -3025,8 +3049,8 @@ export default function OrdersPage() {
                   className="formActions"
                   style={isMobile ? { position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))', zIndex: 20 } : undefined}
                 >
-                  <button className="btn" onClick={addTrade} style={isMobile ? { width: '100%', minHeight: 40, fontSize: 12 } : undefined}>
-                    {merchantOrderEnabled ? t('sendForApproval') : t('addTrade')}
+                  <button className="btn" onClick={addTrade} disabled={isAddingTrade} style={isMobile ? { width: '100%', minHeight: 40, fontSize: 12 } : undefined}>
+                    {isAddingTrade ? '…' : (merchantOrderEnabled ? t('sendForApproval') : t('addTrade'))}
                   </button>
                 </div>
                 <div className={`msg ${saleMessage.includes(t('fixFields')) ? 'bad' : ''}`}>{saleMessage}</div>
