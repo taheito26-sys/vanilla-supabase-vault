@@ -55,6 +55,20 @@ Any network failure mid-sequence leaves corrupted partial state. Supabase RPC fu
 
 ## 2. High Bugs
 
+### 🔴 2.0 Sale Cash Deposit Not Reflected in Cash Management
+**Files:** `src/features/orders/utils/cashDeposit.ts`, `src/features/stock/components/CashManagement.tsx`
+
+`applyOrderCashDeposit` has two code paths:
+
+- **Path A (cashAccounts exist):** Writes a `CashLedgerEntry` with `type: 'sale_deposit'` into `state.cashLedger`. `CashManagement` reads `state.cashLedger` — deposit appears correctly. ✅
+- **Path B (no cashAccounts / fallback):** Writes to the legacy `state.cashHistory` array and increments `state.cashQAR` directly. `CashManagement` does **not** read `cashHistory` — the deposit is invisible in the UI. ❌
+
+Any user who has not configured cash accounts (or whose account list is empty) will have sale proceeds silently written to `cashHistory` only. `cashQAR` increments numerically but no ledger entry exists — Cash Management shows no record of the deposit.
+
+**Impact:** Sale cash deposits disappear from Cash Management for users without configured cash accounts. The money appears in the total balance only, with no audit trail and no visibility into which sale it came from.
+
+---
+
 ### 🟠 2.1 Silent Cloud Sync Failure
 **File:** `src/lib/useTrackerState.ts`
 
@@ -242,6 +256,7 @@ The rejection mutation runs 5+ steps. A single `onError` toast covers all failur
 | E13 | Deal-term snapshot stored on settlement creation | 🟡 Medium | Prevents retroactive term changes affecting pending settlements |
 | E14 | Debounce theme DOM updates | 🔵 Low | Reduce repaints during settings interaction |
 | E15 | Surface withdrawal approval UI flow end-to-end | 🟠 High | Withdrawal workflow exists in code but is unreachable in UI |
+| E16 | Remove `cashHistory` fallback path in `applyOrderCashDeposit` — always write to `cashLedger` | 🔴 Critical | Legacy path makes sale deposits invisible in Cash Management |
 
 ---
 
@@ -249,7 +264,8 @@ The rejection mutation runs 5+ steps. A single `onError` toast covers all failur
 
 The following items risk live data corruption if left unaddressed:
 
-1. **Fix pool balance reversal calculation** — current logic produces wrong `pool_balance_after` for payout reversals
+1. **Fix sale cash deposit not appearing in Cash Management** — remove `cashHistory` fallback in `applyOrderCashDeposit`; always write to `cashLedger` so the deposit is visible
+2. **Fix pool balance reversal calculation** — current logic produces wrong `pool_balance_after` for payout reversals
 2. **Wrap settlement rejection in an RPC function** — eliminates partial-state corruption risk
 3. **Fix withdrawal workflow** — period must not be pre-settled before merchant approval
 4. **Add `original_entry_id` to reversals** — without this, financial reconciliation is impossible
