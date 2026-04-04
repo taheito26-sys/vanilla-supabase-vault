@@ -15,9 +15,13 @@ CREATE TABLE IF NOT EXISTS public.capital_transfers (
 
 ALTER TABLE public.capital_transfers ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "ct_select" ON public.capital_transfers;
+DROP POLICY IF EXISTS "ct_select" ON public.capital_transfers;
 CREATE POLICY "ct_select" ON public.capital_transfers
   FOR SELECT USING (public.is_relationship_member(relationship_id));
 
+DROP POLICY IF EXISTS "ct_insert" ON public.capital_transfers;
+DROP POLICY IF EXISTS "ct_insert" ON public.capital_transfers;
 CREATE POLICY "ct_insert" ON public.capital_transfers
   FOR INSERT WITH CHECK (
     public.is_relationship_member(relationship_id)
