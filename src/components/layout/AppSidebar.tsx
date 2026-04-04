@@ -33,6 +33,8 @@ interface NavItem {
   path: string;
 }
 
+const p2pPath = '/trading/p2p';
+
 export const tradingNav: NavItem[] = [
   { labelKey: 'dashboard', fallback: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
   { labelKey: 'orders', fallback: 'Orders', icon: ArrowLeftRight, path: '/trading/orders' },
@@ -79,7 +81,12 @@ export function MobileBottomNav({ onMoreClick }: { onMoreClick: () => void }) {
             to={item.path}
             className={cn('mobile-bottom-nav__item', active && 'is-active')}
           >
-            <span className="mobile-bottom-nav__icon-wrap">
+            <span
+              className={cn(
+                'mobile-bottom-nav__icon-wrap',
+                item.path === p2pPath && active && 'mobile-bottom-nav__icon-wrap--p2p-active'
+              )}
+            >
               <item.icon className="mobile-bottom-nav__icon" />
             </span>
             <span className="mobile-bottom-nav__label">{t(item.labelKey as any) || item.fallback}</span>
@@ -154,7 +161,16 @@ export function AppSidebar({ isMobile = false, mobileOpen = false, onMobileClose
                 isActive(item.path) && 'bg-sidebar-accent text-sidebar-primary font-medium'
               )}
             >
-              <item.icon className="h-3.5 w-3.5 shrink-0" />
+              <span
+                className={cn(
+                  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors',
+                  item.path === p2pPath &&
+                    isActive(item.path) &&
+                    'border border-emerald-400/90 text-emerald-300 shadow-[0_0_0_1px_rgba(52,211,153,0.2)]'
+                )}
+              >
+                <item.icon className="h-3.5 w-3.5 shrink-0" />
+              </span>
               {!collapsed && <span className="truncate">{t(item.labelKey as any) || item.fallback}</span>}
             </Link>
           </li>

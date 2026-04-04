@@ -207,6 +207,18 @@
 .mobile-bottom-nav__icon-wrap {
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+}
+
+.mobile-bottom-nav__icon-wrap--p2p-active {
+  border: 1px solid hsl(var(--success) / 0.9);
+  box-shadow: 0 0 0 1px hsl(var(--success) / 0.18);
+  color: hsl(var(--success));
 }
 
 .mobile-bottom-nav__icon {
