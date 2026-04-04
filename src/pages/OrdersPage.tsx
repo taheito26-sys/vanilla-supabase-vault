@@ -56,7 +56,7 @@ export default function OrdersPage() {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
-  const { state, derived, applyState } = useTrackerState({
+  const { state, derived, applyState, cloudLoaded } = useTrackerState({
     lowStockThreshold: settings.lowStockThreshold,
     priceAlertThreshold: settings.priceAlertThreshold,
     range: settings.range,
@@ -1817,11 +1817,16 @@ export default function OrdersPage() {
                 </div>
               </div>
 
-              {filtered.length === 0 ? (
+              {!cloudLoaded && filtered.length === 0 ? (
+                <div className="empty">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3 }}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+                  <div className="empty-t" style={{ color: 'var(--muted)' }}>{t('loading') || 'Loading…'}</div>
+                </div>
+              ) : subFilteredMy.length === 0 ? (
                 <div className="empty">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 4h10M7 8h10M7 12h10M7 16h10M7 20h10" /></svg>
-                  <div className="empty-t">{t('noTradesYet')}</div>
-                  <div className="empty-s">{t('addBatchThenSale')}</div>
+                  <div className="empty-t">{filtered.length > 0 ? (t('noTradesThisMonth') || 'No trades this month') : t('noTradesYet')}</div>
+                  <div className="empty-s">{filtered.length > 0 ? (t('selectAnotherMonth') || 'Select another month above') : t('addBatchThenSale')}</div>
                 </div>
               ) : isMobile ? (
                 <div style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
