@@ -34,3 +34,9 @@ ios/DerivedData
 .env
 .env.local
 .env.production
+.claude/
+caches/
+.gradle/
+android/.gradle/
+android/app/build/
+android/build/
