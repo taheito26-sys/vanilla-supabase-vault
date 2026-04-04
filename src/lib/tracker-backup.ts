@@ -18,6 +18,8 @@ const TRACKER_CLEAR_EXACT_KEYS = [
   'taheito_state',
   'p2p_tracker_vault_meta',
 ] as const;
+const TRACKER_STORAGE_SCHEMA_VERSION = '2026-04-04-orders-cache-reset-v1';
+const TRACKER_STORAGE_SCHEMA_VERSION_KEY = 'tracker_storage_schema_version';
 
 const IMPORT_STATE_CANDIDATE_KEYS = [
   'state',
@@ -218,5 +220,17 @@ export function listTrackerKeysToClear(storage: Storage): string[] {
 export function clearTrackerStorage(storage: Storage): void {
   for (const key of listTrackerKeysToClear(storage)) {
     storage.removeItem(key);
+  }
+}
+
+export function enforceTrackerStorageSchema(storage: Storage): boolean {
+  try {
+    const current = storage.getItem(TRACKER_STORAGE_SCHEMA_VERSION_KEY);
+    if (current === TRACKER_STORAGE_SCHEMA_VERSION) return false;
+    clearTrackerStorage(storage);
+    storage.setItem(TRACKER_STORAGE_SCHEMA_VERSION_KEY, TRACKER_STORAGE_SCHEMA_VERSION);
+    return true;
+  } catch {
+    return false;
   }
 }

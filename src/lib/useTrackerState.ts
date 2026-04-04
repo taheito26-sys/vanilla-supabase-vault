@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { computeFIFO, type TrackerState, type DerivedState } from './tracker-helpers';
 import { createEmptyState, buildStateFrom, mergeLocalAndCloud } from './tracker-state';
 import { saveTrackerState, loadTrackerStateFromCloud } from './tracker-sync';
-import { getCurrentTrackerState } from './tracker-backup';
+import { enforceTrackerStorageSchema, getCurrentTrackerState } from './tracker-backup';
 import { useAuth } from '@/features/auth/auth-context';
 import { saveCashToCloud, loadCashFromCloud } from './cash-sync';
 
@@ -19,6 +19,13 @@ interface UseTrackerOptions {
 export function useTrackerState(options: UseTrackerOptions = {}) {
   const { isAuthenticated } = useAuth();
   const [cloudLoaded, setCloudLoaded] = useState(false);
+
+  useEffect(() => {
+    if (options.preloadedState) return;
+    if (typeof window === 'undefined') return;
+    if (!isAuthenticated) return;
+    enforceTrackerStorageSchema(window.localStorage);
+  }, [isAuthenticated, options.preloadedState]);
 
   const initial = useMemo(() => createEmptyState({
     lowStockThreshold: options.lowStockThreshold,
