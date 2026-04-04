@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n';
 import { useSettlementPeriods, useSyncSettlementPeriods, type SettlementPeriod } from '@/hooks/useSettlementPeriods';
 import { useDealCapital, useReinvestProfit, usePayoutProfit } from '@/hooks/useDealCapital';
+import { useSettlements, useApproveSettlement, type Settlement } from '@/hooks/useSettlements';
 import { fmtU } from '@/lib/tracker-helpers';
 import { toast } from 'sonner';
 import type { Cadence } from '@/lib/settlement-periods';
@@ -177,7 +178,11 @@ function PeriodCard({ period, dealAmount, relationshipId, isPartner, dealType }:
       {period.status === 'settled' ? (
         <div style={{ fontSize: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
           <span className="pill good">
-            {period.resolution === 'payout' ? '💰 ' + t('paidOutToPartner') : '🔄 ' + t('reinvestedToPool')}
+            {period.resolution === 'payout'
+              ? '💰 ' + t('paidOutToPartner')
+              : period.resolution === 'withdrawal'
+                ? '📤 ' + t('withdrawnByPartner')
+                : '🔄 ' + t('reinvestedToPool')}
           </span>
           <span className="mono" style={{ color: 'var(--good)' }}>{fmtU(period.settled_amount)}</span>
         </div>
@@ -197,11 +202,94 @@ function PeriodCard({ period, dealAmount, relationshipId, isPartner, dealType }:
   );
 }
 
+// ─── Settlement Record Row ───────────────────────────────────────────
+// Displays a single merchant_settlements record with approve/reject lifecycle.
+function SettlementRecordRow({ record, relationshipId, isPartner, periodIdForRecord }: {
+  record: Settlement;
+  relationshipId: string;
+  isPartner: boolean;
+  /** settlement_periods.id linked to this record (needed for period reopening on rejection) */
+  periodIdForRecord?: string;
+}) {
+  const t = useT();
+  const approve = useApproveSettlement();
+
+  const statusCls = record.status === 'approved' ? 'good'
+    : record.status === 'rejected' ? 'bad'
+    : 'warn'; // pending
+
+  const handleApprove = async () => {
+    try {
+      await approve.mutateAsync({ id: record.id, approved: true, relationship_id: relationshipId });
+      toast.success(t('settlementApproved') || 'Settlement approved');
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const handleReject = async () => {
+    try {
+      await approve.mutateAsync({
+        id: record.id,
+        approved: false,
+        period_id: periodIdForRecord,
+        relationship_id: relationshipId,
+      });
+      toast.success(t('settlementRejected') || 'Settlement rejected — period reopened');
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderBottom: '1px solid var(--line)', fontSize: 11 }}>
+      <span className={`pill ${statusCls}`} style={{ minWidth: 64, textAlign: 'center', flexShrink: 0 }}>
+        {record.status}
+      </span>
+      <span className="mono" style={{ fontWeight: 700, flexShrink: 0 }}>
+        {fmtU(record.amount)} {record.currency}
+      </span>
+      <span style={{ color: 'var(--muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {record.deal_title || record.deal_id?.slice(0, 8)} {record.notes ? `· ${record.notes}` : ''}
+      </span>
+      <span style={{ color: 'var(--muted)', flexShrink: 0, fontSize: 10 }}>
+        {record.created_at ? new Date(record.created_at).toLocaleDateString() : ''}
+      </span>
+      {record.status === 'pending' && !isPartner && (
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button
+            className="btn"
+            onClick={handleApprove}
+            disabled={approve.isPending}
+            style={{ fontSize: 9, padding: '2px 8px', background: 'var(--good)', border: 'none' }}
+          >
+            ✓ {t('approve') || 'Approve'}
+          </button>
+          <button
+            className="btn"
+            onClick={handleReject}
+            disabled={approve.isPending}
+            style={{ fontSize: 9, padding: '2px 8px', background: 'var(--bad)', border: 'none' }}
+          >
+            ✕ {t('reject') || 'Reject'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettlementTab({ relationshipId, deals, isPartner, trades, tradeCalc }: Props) {
   const t = useT();
   const { data: periods, isLoading } = useSettlementPeriods(relationshipId);
   const syncPeriods = useSyncSettlementPeriods(relationshipId);
+  const { data: settlementRecords } = useSettlements(relationshipId);
   const [filterDealId, setFilterDealId] = useState<string>('all');
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Build a map: settlement.id → period.id (for period reopening on rejection)
+  const settlementToPeriodMap = new Map<string, string>();
+  (periods || []).forEach(p => {
+    if ((p as any).settlement_id) {
+      settlementToPeriodMap.set((p as any).settlement_id, p.id);
+    }
+  });
 
   // Sync periods on mount with real trade data
   useEffect(() => {
@@ -290,6 +378,65 @@ export function SettlementTab({ relationshipId, deals, isPartner, trades, tradeC
           />
         ))
       )}
+
+      {/* ─── Settlement Records Lifecycle ──────────────────────────── */}
+      {/* Renders merchant_settlements records with approve/reject actions.
+          This closes the lifecycle gap for records created by:
+          - addTrade(settleImmediately=true)
+          - usePayoutProfit() (payout path)
+          - useWithdrawFromPool() (partner withdrawal)
+      */}
+      {(settlementRecords && settlementRecords.length > 0) && (() => {
+        const pending = settlementRecords.filter(r => r.status === 'pending');
+        const history = settlementRecords.filter(r => r.status !== 'pending');
+        return (
+          <div className="panel" style={{ overflow: 'hidden' }}>
+            <div className="panel-head">
+              <span style={{ fontSize: 11, fontWeight: 700 }}>
+                {t('settlementRecords') || 'Settlement Records'}
+                {pending.length > 0 && (
+                  <span className="pill warn" style={{ marginLeft: 6, fontSize: 9 }}>
+                    {pending.length} {t('pending') || 'pending'}
+                  </span>
+                )}
+              </span>
+              {history.length > 0 && (
+                <button
+                  className="pill"
+                  onClick={() => setShowHistory(h => !h)}
+                  style={{ fontSize: 9, cursor: 'pointer' }}
+                >
+                  {showHistory ? (t('hideHistory') || 'Hide history') : `${t('viewHistory') || 'History'} (${history.length})`}
+                </button>
+              )}
+            </div>
+            <div>
+              {pending.length === 0 && !showHistory && (
+                <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--muted)' }}>
+                  {t('noSettlementsPending') || 'No pending settlements.'}
+                </div>
+              )}
+              {pending.map(r => (
+                <SettlementRecordRow
+                  key={r.id}
+                  record={r}
+                  relationshipId={relationshipId}
+                  isPartner={isPartner}
+                  periodIdForRecord={settlementToPeriodMap.get(r.id)}
+                />
+              ))}
+              {showHistory && history.map(r => (
+                <SettlementRecordRow
+                  key={r.id}
+                  record={r}
+                  relationshipId={relationshipId}
+                  isPartner={isPartner}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

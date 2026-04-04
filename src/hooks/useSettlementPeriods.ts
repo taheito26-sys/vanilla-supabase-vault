@@ -20,7 +20,7 @@ export interface SettlementPeriod {
   status: PeriodStatus;
   settled_amount: number;
   settlement_id: string | null;
-  resolution: 'payout' | 'reinvest' | null;
+  resolution: 'payout' | 'reinvest' | 'withdrawal' | null;
   resolved_by: string | null;
   resolved_at: string | null;
   due_at: string | null;

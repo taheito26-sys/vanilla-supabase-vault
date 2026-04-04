@@ -6,7 +6,7 @@ export interface CapitalEntry {
   id: string;
   deal_id: string;
   relationship_id: string;
-  type: 'reinvest' | 'withdrawal' | 'payout';
+  type: 'reinvest' | 'withdrawal' | 'payout' | 'reversal';
   amount: number;
   currency: string;
   period_id: string | null;
@@ -71,7 +71,34 @@ export function useReinvestProfit() {
       currency: string;
       current_pool_balance: number;
     }) => {
+      // Idempotency guard: abort if period already settled (prevents duplicate ledger entries on retry)
+      const { data: period, error: periodCheckErr } = await supabase
+        .from('settlement_periods')
+        .select('status')
+        .eq('id', input.period_id)
+        .single();
+      if (periodCheckErr) throw periodCheckErr;
+      if ((period as any)?.status === 'settled') {
+        throw new Error('This period has already been settled.');
+      }
+
       const newBalance = input.current_pool_balance + input.amount;
+      const now = new Date().toISOString();
+
+      const { data: settlement, error: settlementErr } = await supabase
+        .from('merchant_settlements')
+        .insert({
+          deal_id: input.deal_id,
+          relationship_id: input.relationship_id,
+          amount: input.amount,
+          currency: input.currency,
+          settled_by: userId!,
+          notes: 'Reinvestment for settlement period',
+          status: 'pending',
+        } as any)
+        .select('id')
+        .single();
+      if (settlementErr) throw settlementErr;
 
       const { error: ledgerErr } = await supabase
         .from('deal_capital_ledger')
@@ -94,8 +121,9 @@ export function useReinvestProfit() {
           status: 'settled',
           resolution: 'reinvest',
           resolved_by: userId,
-          resolved_at: new Date().toISOString(),
+          resolved_at: now,
           settled_amount: input.amount,
+          settlement_id: (settlement as any).id,
         } as any)
         .eq('id', input.period_id);
       if (periodErr) throw periodErr;
@@ -121,6 +149,17 @@ export function usePayoutProfit() {
       currency: string;
       current_pool_balance: number;
     }) => {
+      // Idempotency guard: abort if period already settled (prevents duplicate settlement records on retry)
+      const { data: period, error: periodCheckErr } = await supabase
+        .from('settlement_periods')
+        .select('status')
+        .eq('id', input.period_id)
+        .single();
+      if (periodCheckErr) throw periodCheckErr;
+      if ((period as any)?.status === 'settled') {
+        throw new Error('This period has already been settled.');
+      }
+
       // Create settlement record
       const { data: settlement, error: settErr } = await supabase
         .from('merchant_settlements')
@@ -192,6 +231,34 @@ export function useWithdrawFromPool() {
         throw new Error('Amount exceeds pool balance');
       }
       const newBalance = input.current_pool_balance - input.amount;
+      const now = new Date();
+
+      const { data: period, error: periodErr } = await supabase
+        .from('settlement_periods')
+        .insert({
+          deal_id: input.deal_id,
+          relationship_id: input.relationship_id,
+          cadence: 'per_order',
+          period_key: `withdrawal:${now.toISOString()}`,
+          period_start: now.toISOString(),
+          period_end: now.toISOString(),
+          due_at: now.toISOString(),
+          trade_count: 0,
+          gross_volume: 0,
+          total_cost: 0,
+          net_profit: 0,
+          total_fees: 0,
+          partner_amount: input.amount,
+          merchant_amount: 0,
+          status: 'settled',
+          resolution: 'withdrawal',
+          resolved_by: userId,
+          resolved_at: now.toISOString(),
+          settled_amount: input.amount,
+        } as any)
+        .select('id')
+        .single();
+      if (periodErr) throw periodErr;
 
       const { error: ledgerErr } = await supabase
         .from('deal_capital_ledger')
@@ -201,6 +268,7 @@ export function useWithdrawFromPool() {
           type: 'withdrawal',
           amount: input.amount,
           currency: input.currency,
+          period_id: (period as any).id,
           initiated_by: userId!,
           pool_balance_after: newBalance,
           note: 'Partner withdrawal from reinvested pool',
@@ -208,7 +276,7 @@ export function useWithdrawFromPool() {
       if (ledgerErr) throw ledgerErr;
 
       // Create settlement so merchant sees the obligation
-      const { error: settErr } = await supabase
+      const { data: settlement, error: settErr } = await supabase
         .from('merchant_settlements')
         .insert({
           deal_id: input.deal_id,
@@ -218,8 +286,18 @@ export function useWithdrawFromPool() {
           settled_by: userId!,
           notes: 'Withdrawal from reinvested profit pool',
           status: 'pending',
-        } as any);
+        } as any)
+        .select('id')
+        .single();
       if (settErr) throw settErr;
+
+      const { error: linkErr } = await supabase
+        .from('settlement_periods')
+        .update({
+          settlement_id: (settlement as any).id,
+        } as any)
+        .eq('id', (period as any).id);
+      if (linkErr) throw linkErr;
     },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['deal-capital', vars.deal_id] });

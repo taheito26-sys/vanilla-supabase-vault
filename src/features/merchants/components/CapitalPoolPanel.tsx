@@ -49,8 +49,16 @@ export function CapitalPoolPanel({ dealId, dealAmount, dealTitle, relationshipId
 
   if (!capital) return null;
 
-  const typeIcon = (type: string) => type === 'reinvest' ? '🔄' : type === 'payout' ? '💰' : '📤';
-  const typeLabel = (type: string) => type === 'reinvest' ? t('reinvestedToPool') : type === 'payout' ? t('paidOutToPartner') : t('withdrawnByPartner');
+  const typeIcon = (type: string) =>
+    type === 'reinvest' ? '🔄' :
+    type === 'payout' ? '💰' :
+    type === 'reversal' ? '↩️' :
+    '📤';
+  const typeLabel = (type: string) =>
+    type === 'reinvest' ? t('reinvestedToPool') :
+    type === 'payout' ? t('paidOutToPartner') :
+    type === 'reversal' ? (t('reversedSettlement') || 'Reversed') :
+    t('withdrawnByPartner');
 
   return (
     <div className="panel" style={{ padding: 10, marginBottom: 10 }}>
@@ -100,8 +108,8 @@ export function CapitalPoolPanel({ dealId, dealAmount, dealTitle, relationshipId
                 {capital.ledger.map(e => (
                   <tr key={e.id}>
                     <td style={{ fontSize: 10 }}>{typeIcon(e.type)} {typeLabel(e.type)}</td>
-                    <td className="mono r" style={{ color: e.type === 'withdrawal' ? 'var(--bad)' : 'var(--good)' }}>
-                      {e.type === 'withdrawal' ? '−' : '+'}{fmtU(e.amount)}
+                    <td className="mono r" style={{ color: e.type === 'reversal' ? 'var(--muted)' : e.type === 'withdrawal' ? 'var(--bad)' : 'var(--good)' }}>
+                      {e.type === 'withdrawal' ? '−' : e.type === 'reversal' ? '↩ ' : '+'}{fmtU(Math.abs(e.amount))}
                     </td>
                     <td style={{ fontSize: 9, color: 'var(--muted)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {e.note || '—'}

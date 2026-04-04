@@ -3,10 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY ?? process.env.SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-const supabase = if (!SUPABASE_URL || !SUPABASE_KEY) {
+if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error("Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY, or VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
 }
-createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const UUIDS = {
   ident_wa_1: '11111111-1111-1111-1111-111111111111',
