@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { computeFIFO, type TrackerState, type DerivedState } from './tracker-helpers';
 import { createEmptyState, buildStateFrom, mergeLocalAndCloud } from './tracker-state';
 import { saveTrackerState, loadTrackerStateFromCloud } from './tracker-sync';
-import { enforceTrackerStorageSchema, getCurrentTrackerState } from './tracker-backup';
+import { getCurrentTrackerState } from './tracker-backup';
 import { useAuth } from '@/features/auth/auth-context';
 import { saveCashToCloud, loadCashFromCloud } from './cash-sync';
 
@@ -19,13 +19,6 @@ interface UseTrackerOptions {
 export function useTrackerState(options: UseTrackerOptions = {}) {
   const { isAuthenticated } = useAuth();
   const [cloudLoaded, setCloudLoaded] = useState(false);
-
-  useEffect(() => {
-    if (options.preloadedState) return;
-    if (typeof window === 'undefined') return;
-    if (!isAuthenticated) return;
-    enforceTrackerStorageSchema(window.localStorage);
-  }, [isAuthenticated, options.preloadedState]);
 
   const initial = useMemo(() => createEmptyState({
     lowStockThreshold: options.lowStockThreshold,
@@ -55,7 +48,8 @@ export function useTrackerState(options: UseTrackerOptions = {}) {
     if (next.cashAccounts?.length || next.cashLedger?.length) {
       if (cashSaveTimer.current) clearTimeout(cashSaveTimer.current);
       cashSaveTimer.current = setTimeout(() => {
-        void saveCashToCloud(next.cashAccounts ?? [], next.cashLedger ?? []);
+        saveCashToCloud(next.cashAccounts ?? [], next.cashLedger ?? [])
+          .catch(err => console.error('[useTrackerState] saveCashToCloud failed:', err));
       }, 2500);
     }
   }, [options.preloadedState]);
@@ -109,17 +103,22 @@ export function useTrackerState(options: UseTrackerOptions = {}) {
       // Also update localStorage with merged state
       saveTrackerState(rebuilt.state);
 
-      // Load dedicated cash tables and prefer them over blob data
+      // Load dedicated cash tables and merge with local state (prefer cloud, keep local-only entries)
       loadCashFromCloud().then(cashData => {
         if (!cashData) return;
         if (cashData.accounts.length === 0 && cashData.ledger.length === 0) return;
-        setState(prev => ({
-          ...prev,
-          cashAccounts: cashData.accounts,
-          cashLedger:   cashData.ledger,
-        }));
-      }).catch(() => {});
-    }).catch(() => {
+        setState(prev => {
+          const cloudIds = new Set(cashData.ledger.map((e: { id: string }) => e.id));
+          const localOnly = (prev.cashLedger || []).filter(e => !cloudIds.has(e.id));
+          return {
+            ...prev,
+            cashAccounts: cashData.accounts,
+            cashLedger: [...cashData.ledger, ...localOnly],
+          };
+        });
+      }).catch((err) => { console.error('[useTrackerState] cash cloud sync failed:', err); });
+    }).catch((err) => {
+      console.error('[useTrackerState] cloud load failed:', err);
       setCloudLoaded(true);
     });
 

@@ -30,58 +30,6 @@ export interface RelationshipDistribution {
   };
 }
 
-interface DealPeriodTotals {
-  totalNetProfit: number;
-  totalPartnerAmount: number;
-  totalMerchantAmount: number;
-}
-
-export function resolveDealDistributionAmounts(args: {
-  allocationBase: 'net_profit' | 'sale_economics';
-  partnerPct: number;
-  realizedPnl: number | null | undefined;
-  totalOrderVolume: number;
-  periodTotals?: DealPeriodTotals;
-}) {
-  const periodTotals = args.periodTotals ?? {
-    totalNetProfit: 0,
-    totalPartnerAmount: 0,
-    totalMerchantAmount: 0,
-  };
-
-  const hasPeriodProfitData =
-    periodTotals.totalNetProfit !== 0 ||
-    periodTotals.totalPartnerAmount !== 0 ||
-    periodTotals.totalMerchantAmount !== 0;
-
-  if (args.allocationBase === 'net_profit' && hasPeriodProfitData) {
-    return {
-      totalNetProfit: periodTotals.totalNetProfit,
-      partnerOwed: periodTotals.totalPartnerAmount,
-      merchantOwed: periodTotals.totalMerchantAmount,
-    };
-  }
-
-  const totalNetProfit =
-    args.realizedPnl != null ? Number(args.realizedPnl) : periodTotals.totalNetProfit;
-
-  if (args.allocationBase === 'net_profit') {
-    const partnerOwed = totalNetProfit * (args.partnerPct / 100);
-    return {
-      totalNetProfit,
-      partnerOwed,
-      merchantOwed: totalNetProfit - partnerOwed,
-    };
-  }
-
-  const partnerOwed = args.totalOrderVolume * (args.partnerPct / 100);
-  return {
-    totalNetProfit,
-    partnerOwed,
-    merchantOwed: args.totalOrderVolume - partnerOwed,
-  };
-}
-
 export function useProfitDistribution(relationshipId: string) {
   const { merchantProfile } = useAuth();
 
@@ -99,11 +47,6 @@ export function useProfitDistribution(relationshipId: string) {
         .select('*')
         .eq('relationship_id', relationshipId)
         .eq('status', 'approved');
-
-      const { data: periods } = await supabase
-        .from('settlement_periods')
-        .select('deal_id, net_profit, partner_amount, merchant_amount')
-        .eq('relationship_id', relationshipId);
 
       const { data: rel } = await supabase
         .from('merchant_relationships')
@@ -138,19 +81,6 @@ export function useProfitDistribution(relationshipId: string) {
         return data ? Number((data as any).pool_balance_after) : 0;
       }
 
-      const periodTotalsByDeal = new Map<string, DealPeriodTotals>();
-      for (const period of periods || []) {
-        const current = periodTotalsByDeal.get(period.deal_id) ?? {
-          totalNetProfit: 0,
-          totalPartnerAmount: 0,
-          totalMerchantAmount: 0,
-        };
-        current.totalNetProfit += Number(period.net_profit || 0);
-        current.totalPartnerAmount += Number(period.partner_amount || 0);
-        current.totalMerchantAmount += Number(period.merchant_amount || 0);
-        periodTotalsByDeal.set(period.deal_id, current);
-      }
-
       const dealDistributions: DealDistribution[] = [];
       for (const deal of (deals || [])) {
         const shares = getDealShares({ deal_type: deal.deal_type, notes: deal.notes });
@@ -161,16 +91,20 @@ export function useProfitDistribution(relationshipId: string) {
 
         const poolBalance = await getDealPoolBalance(deal.id);
         const totalOrderVolume = Number(deal.amount || 0) + poolBalance;
-        const distribution = resolveDealDistributionAmounts({
-          allocationBase: shares.allocationBase,
-          partnerPct: shares.partnerPct || 0,
-          realizedPnl: deal.realized_pnl,
-          totalOrderVolume,
-          periodTotals: periodTotalsByDeal.get(deal.id),
-        });
-        const totalNetProfit = distribution.totalNetProfit;
-        const partnerOwed = shares.partnerPct !== null ? distribution.partnerOwed : 0;
-        const merchantOwed = shares.partnerPct !== null ? distribution.merchantOwed : 0;
+        const totalNetProfit = Number(deal.realized_pnl || 0);
+
+        let partnerOwed = 0;
+        let merchantOwed = 0;
+
+        if (shares.partnerPct !== null) {
+          if (shares.allocationBase === 'net_profit') {
+            partnerOwed = totalNetProfit * (shares.partnerPct / 100);
+            merchantOwed = totalNetProfit - partnerOwed;
+          } else {
+            partnerOwed = totalOrderVolume * (shares.partnerPct / 100);
+            merchantOwed = totalOrderVolume - partnerOwed;
+          }
+        }
 
         dealDistributions.push({
           dealId: deal.id,

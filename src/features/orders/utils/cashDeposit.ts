@@ -1,4 +1,4 @@
-import { uid, deriveCashQAR, type TrackerState, type CashLedgerEntry, type CashTransaction } from '@/lib/tracker-helpers';
+import { uid, deriveCashQAR, type TrackerState, type CashLedgerEntry } from '@/lib/tracker-helpers';
 
 export interface ApplyOrderCashDepositInput {
   nextState: TrackerState;
@@ -52,22 +52,34 @@ export function applyOrderCashDeposit({
       cashQAR: deriveCashQAR(nextState.cashAccounts, updatedLedger),
     };
   }
-
-  const currentCash = nextState.cashQAR || 0;
-  const newCash = currentCash + depositAmt;
-  const cashTx: CashTransaction = {
+  
+  // Ensure deposits are reflected in Cash Management totals even when no QAR account exists yet.
+  const autoAccountId = uid();
+  const autoAccount = {
+    id: autoAccountId,
+    name: 'Cash Wallet',
+    type: 'hand' as const,
+    currency: 'QAR' as const,
+    status: 'active' as const,
+    notes: 'Auto-created from order sale deposit',
+    createdAt: now,
+  };
+  const ledgerEntry = {
     id: uid(),
     ts: now,
-    type: 'sale_deposit',
+    type: 'sale_deposit' as const,
+    accountId: autoAccountId,
+    direction: 'in' as const,
     amount: depositAmt,
-    balanceAfter: newCash,
-    owner: nextState.cashOwner || '',
-    bankAccount: '',
+    currency: 'QAR' as const,
     note,
   };
+  const nextAccounts = [...(nextState.cashAccounts || []), autoAccount];
+  const nextLedger = [...(nextState.cashLedger || []), ledgerEntry];
   return {
     ...nextState,
-    cashQAR: newCash,
-    cashHistory: [...(nextState.cashHistory || []), cashTx],
+    cashAccounts: nextAccounts,
+    cashLedger: nextLedger,
+    cashQAR: deriveCashQAR(nextAccounts, nextLedger),
   };
 }

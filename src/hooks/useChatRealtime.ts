@@ -64,7 +64,7 @@ export function useChatRealtime({ relationshipIds }: RealtimeOptions) {
             // Message is visible — mark as read immediately via DB
             supabase
               .from('merchant_messages')
-              .update({ is_read: true } as any)
+              .update({ read_at: new Date().toISOString() })
               .eq('id', msg.id)
               .then(() => {
                 queryClient.invalidateQueries({ queryKey: ['unified-chat'] });

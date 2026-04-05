@@ -18,6 +18,7 @@ import {
   MoreHorizontal,
   Store,
   ShieldCheck,
+  Globe,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -33,16 +34,14 @@ interface NavItem {
   path: string;
 }
 
-const p2pPath = '/trading/p2p';
-
 export const tradingNav: NavItem[] = [
   { labelKey: 'dashboard', fallback: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
-  { labelKey: 'orders', fallback: 'Orders', icon: ArrowLeftRight, path: '/trading/orders' },
+  { labelKey: 'orders', fallback: 'Orders', icon: TrendingUp, path: '/trading/orders' },
   { labelKey: 'stock', fallback: 'Stock', icon: Wallet, path: '/trading/stock' },
-  { labelKey: 'calendar', fallback: 'Calendar', icon: Calendar, path: '/trading/calendar' },
-  { labelKey: 'p2pTracker', fallback: 'P2P Market', icon: TrendingUp, path: '/trading/p2p' },
   { labelKey: 'crm', fallback: 'CRM', icon: UserCircle, path: '/crm' },
   { labelKey: 'chat', fallback: 'Chat', icon: MessageCircle, path: '/chat' },
+  { labelKey: 'calendar', fallback: 'Calendar', icon: Calendar, path: '/trading/calendar' },
+  { labelKey: 'p2pTracker', fallback: 'P2P Market', icon: Globe, path: '/trading/p2p' },
 ];
 
 export const networkNav: NavItem[] = [
@@ -65,7 +64,7 @@ export function MobileBottomNav({ onMoreClick }: { onMoreClick: () => void }) {
     tradingNav[1], // Orders
     tradingNav[2], // Stock
     networkNav[0], // Merchants
-    { labelKey: 'chat', fallback: 'Chat', icon: MessageCircle, path: '/chat' } as NavItem,
+    tradingNav[4], // Chat
   ].filter(Boolean) as NavItem[];
 
   return (
@@ -81,12 +80,7 @@ export function MobileBottomNav({ onMoreClick }: { onMoreClick: () => void }) {
             to={item.path}
             className={cn('mobile-bottom-nav__item', active && 'is-active')}
           >
-            <span
-              className={cn(
-                'mobile-bottom-nav__icon-wrap',
-                item.path === p2pPath && active && 'mobile-bottom-nav__icon-wrap--p2p-active'
-              )}
-            >
+            <span className="mobile-bottom-nav__icon-wrap">
               <item.icon className="mobile-bottom-nav__icon" />
             </span>
             <span className="mobile-bottom-nav__label">{t(item.labelKey as any) || item.fallback}</span>
@@ -161,16 +155,7 @@ export function AppSidebar({ isMobile = false, mobileOpen = false, onMobileClose
                 isActive(item.path) && 'bg-sidebar-accent text-sidebar-primary font-medium'
               )}
             >
-              <span
-                className={cn(
-                  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors',
-                  item.path === p2pPath &&
-                    isActive(item.path) &&
-                    'border border-emerald-400/90 text-emerald-300 shadow-[0_0_0_1px_rgba(52,211,153,0.2)]'
-                )}
-              >
-                <item.icon className="h-3.5 w-3.5 shrink-0" />
-              </span>
+              <item.icon className="h-3.5 w-3.5 shrink-0" />
               {!collapsed && <span className="truncate">{t(item.labelKey as any) || item.fallback}</span>}
             </Link>
           </li>

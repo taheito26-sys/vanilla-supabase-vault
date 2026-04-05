@@ -12,6 +12,8 @@ interface UserRow {
   email: string;
   display_name?: string;
   status: string;
+  hasBackup?: boolean;
+  lastBackup?: string;
 }
 
 function deterministicPassword(userId: string) {
@@ -20,10 +22,12 @@ function deterministicPassword(userId: string) {
 
 async function ensureGasSession(email: string, userId: string, name?: string): Promise<{ email: string; token: string } | null> {
   const pw = deterministicPassword(userId);
+  // Try login
   try {
     const res = await rawGasPost({ action: 'login', email, password: pw });
     if (res?.ok && res.token) return { email, token: res.token };
   } catch {}
+  // Try register
   try {
     const res = await rawGasPost({ action: 'register', email, password: pw, name: name || email.split('@')[0] });
     if (res?.ok && res.token) return { email, token: res.token };
@@ -57,7 +61,7 @@ export function AdminBackupManager() {
   const [perUserLoading, setPerUserLoading] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    void loadUsers();
+    loadUsers();
   }, []);
 
   const loadUsers = async () => {
@@ -90,6 +94,7 @@ export function AdminBackupManager() {
   const backupSingleUser = async (user: UserRow) => {
     setPerUserLoading(prev => ({ ...prev, [user.user_id]: 'backup' }));
     try {
+      // Get their tracker state from DB
       const { data } = await supabase
         .from('tracker_snapshots')
         .select('state')
@@ -108,11 +113,11 @@ export function AdminBackupManager() {
       }
 
       await backupForUser(session.email, session.token, data.state as Record<string, unknown>, `Admin backup — ${new Date().toISOString()}`);
-      toast.success(`Backed up ${user.display_name}`);
+      toast.success(`✓ Backed up ${user.display_name}`);
     } catch (e: any) {
       toast.error(`Backup failed for ${user.display_name}: ${e.message}`);
     } finally {
-      setPerUserLoading(prev => { const next = { ...prev }; delete next[user.user_id]; return next; });
+      setPerUserLoading(prev => { const n = { ...prev }; delete n[user.user_id]; return n; });
     }
   };
 
@@ -132,6 +137,8 @@ export function AdminBackupManager() {
         return;
       }
 
+      // Write to tracker_snapshots via admin RPC or direct update
+      // Since admin has RLS access, use upsert
       const { error } = await supabase
         .from('tracker_snapshots')
         .upsert({
@@ -141,11 +148,11 @@ export function AdminBackupManager() {
         }, { onConflict: 'user_id' });
 
       if (error) throw error;
-      toast.success(`Restored ${user.display_name} from cloud backup`);
+      toast.success(`✓ Restored ${user.display_name} from cloud backup`);
     } catch (e: any) {
       toast.error(`Restore failed for ${user.display_name}: ${e.message}`);
     } finally {
-      setPerUserLoading(prev => { const next = { ...prev }; delete next[user.user_id]; return next; });
+      setPerUserLoading(prev => { const n = { ...prev }; delete n[user.user_id]; return n; });
     }
   };
 
@@ -173,7 +180,7 @@ export function AdminBackupManager() {
       }
     }
     setBulkAction(null);
-    toast.success(`Bulk backup complete: ${success} success / ${fail} failed`);
+    toast.success(`Bulk backup complete: ${success} ✓ / ${fail} ✗`);
   };
 
   const restoreAllUsers = async () => {
@@ -203,11 +210,12 @@ export function AdminBackupManager() {
       }
     }
     setBulkAction(null);
-    toast.success(`Bulk restore complete: ${success} success / ${fail} failed`);
+    toast.success(`Bulk restore complete: ${success} ✓ / ${fail} ✗`);
   };
 
   return (
     <div className="space-y-4">
+      {/* Bulk actions */}
       <Card className="glass">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
@@ -219,25 +227,42 @@ export function AdminBackupManager() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-[11px] text-muted-foreground">
-            Backup or restore tracker data for all approved users via Google Drive cloud storage.
+            Backup or restore tracker data for all approved users via Google Drive cloud storage. Each user's data is stored under their own cloud account.
           </p>
 
           <div className="flex gap-2 flex-wrap">
-            <Button size="sm" onClick={backupAllUsers} disabled={!!bulkAction || users.length === 0}>
+            <Button
+              size="sm"
+              onClick={backupAllUsers}
+              disabled={!!bulkAction || users.length === 0}
+            >
               {bulkAction === 'backup' ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Cloud className="w-3 h-3 mr-1" />}
               Backup All Users
             </Button>
-            <Button size="sm" variant="secondary" onClick={restoreAllUsers} disabled={!!bulkAction || users.length === 0}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={restoreAllUsers}
+              disabled={!!bulkAction || users.length === 0}
+            >
               {bulkAction === 'restore' ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
               Restore All Users
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void loadUsers()} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={loadUsers} disabled={loading}>
               <RefreshCw className={`w-3 h-3 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
           </div>
+
+          {bulkAction && (
+            <div className="flex items-center gap-2 text-[11px] text-primary">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {bulkAction === 'backup' ? 'Backing up all users…' : 'Restoring all users…'} Please wait.
+            </div>
+          )}
         </CardContent>
       </Card>
 
+      {/* Per-user list */}
       <Card className="glass">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-display flex items-center gap-2">
@@ -265,11 +290,23 @@ export function AdminBackupManager() {
                       <span className="text-[10px] text-muted-foreground ml-5">{user.email}</span>
                     </div>
                     <div className="flex gap-1 shrink-0">
-                      <Button variant="ghost" size="sm" className="h-6 text-[9px] px-2" disabled={!!userLoading || !!bulkAction} onClick={() => void backupSingleUser(user)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[9px] px-2"
+                        disabled={!!userLoading || !!bulkAction}
+                        onClick={() => backupSingleUser(user)}
+                      >
                         {userLoading === 'backup' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cloud className="w-3 h-3 mr-0.5" />}
                         Backup
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-6 text-[9px] px-2" disabled={!!userLoading || !!bulkAction} onClick={() => void restoreSingleUser(user)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[9px] px-2"
+                        disabled={!!userLoading || !!bulkAction}
+                        onClick={() => restoreSingleUser(user)}
+                      >
                         {userLoading === 'restore' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3 mr-0.5" />}
                         Restore
                       </Button>

@@ -31,7 +31,7 @@ describe('mergeTrackerStatesForMerchant', () => {
     expect(merged?.batches).toHaveLength(2);
     expect(merged?.trades).toHaveLength(2);
     expect(merged?.customers).toHaveLength(2);
-    const t2 = (merged?.trades as any[]).find((trade) => trade.id === 't2');
+    const t2 = (merged?.trades as any[]).find((t) => t.id === 't2');
     expect(t2?.sellPriceQAR).toBe(4.2);
     expect(t2?.note).toBe('updated');
   });

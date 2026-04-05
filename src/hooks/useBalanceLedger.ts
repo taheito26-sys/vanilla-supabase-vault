@@ -35,7 +35,6 @@ export function useBalanceLedger(relationshipId: string) {
           .from('deal_capital_ledger')
           .select('*')
           .eq('relationship_id', relationshipId)
-          .neq('type', 'reversal')
           .order('created_at', { ascending: true }),
       ]);
       const transfers = transfersRes.data;

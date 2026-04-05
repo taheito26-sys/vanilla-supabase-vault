@@ -5,7 +5,7 @@ import {
   fmtQWithUnit, fmtU, fmtQ, fmtPct, fmtP,
   fmtTotal, fmtPrice,
   kpiFor, totalStock, stockCostQAR, getWACOP,
-  rangeLabel, num, startOfDay,
+  rangeLabel, num, startOfDay, inRange,
   deriveCashQAR,
 } from '@/lib/tracker-helpers';
 import { useTheme } from '@/lib/theme-context';
@@ -40,6 +40,8 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     preloadedState: adminTrackerState || undefined,
   });
 
+  const dM = kpiFor(state, derived, 'this_month');
+  const dL = kpiFor(state, derived, 'last_month');
   const d1 = kpiFor(state, derived, 'today');
   const d7 = kpiFor(state, derived, '7d');
   const d30 = kpiFor(state, derived, '30d');
@@ -50,12 +52,19 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const rLabel = rangeLabel(settings.range);
 
   const allTrades = state.trades.filter(t => !t.voided);
+  const getTradeMyPct = (tr: typeof allTrades[0]) => {
+    const merchantPct = Number(tr.merchantPct);
+    if (Number.isFinite(merchantPct) && merchantPct > 0 && merchantPct <= 100) return merchantPct;
+    const partnerPct = Number(tr.partnerPct);
+    if (Number.isFinite(partnerPct) && partnerPct >= 0 && partnerPct < 100) return 100 - partnerPct;
+    return 100;
+  };
   const allMargins = allTrades.map(tr => {
     const c = derived.tradeCalc.get(tr.id);
     if (!c?.ok) return null;
     // For linked trades, adjust margin to reflect only my share
     if (tr.linkedDealId || tr.linkedRelId) {
-      const myPct = tr.merchantPct ?? 100;
+      const myPct = getTradeMyPct(tr);
       const myNet = c.netQAR * myPct / 100;
       const rev = tr.amountUSDT * tr.sellPriceQAR;
       return rev > 0 ? (myNet / rev) * 100 : 0;
@@ -104,6 +113,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     status: string;
     direction: 'outgoing' | 'incoming';
     dealType: string;
+    ts: number;
   }
 
   const { data: merchantDealKpis } = useQuery({
@@ -122,7 +132,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
       const { data: deals } = relIds.length > 0
         ? await supabase
             .from('merchant_deals')
-            .select('id, amount, status, created_by, notes, deal_type, relationship_id, title')
+            .select('id, amount, status, created_by, notes, deal_type, relationship_id, title, created_at')
             .in('relationship_id', relIds)
             .order('created_at', { ascending: false })
         : { data: [] as any[] };
@@ -148,8 +158,8 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
       const relMap = new Map<string, { merchant_a_id: string; merchant_b_id: string }>();
       for (const r of (rels || [])) relMap.set(r.id, r);
 
-      let outCount = 0, outVol = 0, outNet = 0;
-      let inCount = 0, inVol = 0, inNet = 0;
+      let outCount = 0, outVol = 0, outNet = 0, outMyShare = 0;
+      let inCount = 0, inVol = 0, inNet = 0, inMyShare = 0;
       let pendingCount = 0, approvedCount = 0;
       let totalMyShare = 0, totalPartnerShare = 0;
       const dealDetails: DealDetail[] = [];
@@ -179,9 +189,9 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         }
 
         if (direction === 'outgoing') {
-          outCount++; outVol += vol; outNet += dealNet;
+          outCount++; outVol += vol; outNet += dealNet; outMyShare += myShare;
         } else {
-          inCount++; inVol += vol; inNet += dealNet;
+          inCount++; inVol += vol; inNet += dealNet; inMyShare += myShare;
         }
 
         totalMyShare += myShare;
@@ -198,16 +208,22 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           status: d.status,
           direction,
           dealType: d.deal_type,
+          ts: (() => {
+            const tradeDateRaw = row.meta.trade_date;
+            const fromMeta = tradeDateRaw ? new Date(tradeDateRaw).getTime() : NaN;
+            const fromCreatedAt = d.created_at ? new Date(d.created_at).getTime() : NaN;
+            return Number.isFinite(fromMeta) ? fromMeta : (Number.isFinite(fromCreatedAt) ? fromCreatedAt : Date.now());
+          })(),
         });
       }
 
       return {
         totalDeals: activeDeals.length,
-        outCount, outVol, outNet,
-        inCount, inVol, inNet,
+        outCount, outVol, outNet, outMyShare,
+        inCount, inVol, inNet, inMyShare,
         pendingCount, approvedCount,
         totalVol: outVol + inVol,
-        totalNet: outNet + inNet,
+        totalNet: outMyShare + inMyShare,
         totalMyShare, totalPartnerShare,
         dealDetails,
       };
@@ -218,6 +234,22 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const handleCashSave = useCallback((newCash: number, owner: string, history?: import('@/lib/tracker-helpers').CashTransaction[]) => {
     applyState({ ...state, cashQAR: newCash, cashOwner: owner, cashHistory: history ?? state.cashHistory ?? [] });
   }, [state, applyState]);
+
+  // Range-aware merchant KPIs
+  const rangeMerchantKpis = useMemo(() => {
+    if (!merchantDealKpis?.dealDetails) return null;
+    const filtered = merchantDealKpis.dealDetails.filter(d => inRange(d.ts, settings.range));
+    let inCount = 0, inNet = 0, inMyShare = 0;
+    let outCount = 0, outNet = 0, outMyShare = 0;
+    for (const d of filtered) {
+      if (d.direction === 'incoming') {
+        inCount++; inNet += d.net; inMyShare += d.myShare;
+      } else {
+        outCount++; outNet += d.net; outMyShare += d.myShare;
+      }
+    }
+    return { inCount, inNet, inMyShare, outCount, outNet, outMyShare };
+  }, [merchantDealKpis, settings.range]);
 
 
   // ── P2P Averages from real trade data ──
@@ -238,7 +270,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     else if (tr.manualBuyPrice) fullNet = tr.amountUSDT * tr.sellPriceQAR - tr.amountUSDT * tr.manualBuyPrice - tr.feeQAR;
     // For linked trades, show only my share
     if (tr.linkedDealId || tr.linkedRelId) {
-      const myPct = tr.merchantPct ?? 100;
+      const myPct = getTradeMyPct(tr);
       return fullNet * myPct / 100;
     }
     return fullNet;
@@ -323,6 +355,44 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     };
   };
 
+  const monthKpis = useMemo(() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
+
+    let myOwnOrdersNet = 0;
+    let myOwnOrdersCount = 0;
+    for (const tr of allTrades) {
+      if (tr.ts < monthStart || tr.ts >= nextMonthStart) continue;
+      if (tr.linkedDealId || tr.linkedRelId) continue;
+      myOwnOrdersNet += tradeNet(tr);
+      myOwnOrdersCount += 1;
+    }
+
+    const inMonthDeals = (merchantDealKpis?.dealDetails || []).filter(d => d.direction === 'incoming' && d.ts >= monthStart && d.ts < nextMonthStart);
+    const outMonthDeals = (merchantDealKpis?.dealDetails || []).filter(d => d.direction === 'outgoing' && d.ts >= monthStart && d.ts < nextMonthStart);
+    const incomingNet = inMonthDeals.reduce((s, d) => s + d.myShare, 0);
+    const outgoingNet = outMonthDeals.reduce((s, d) => s + d.myShare, 0);
+    const totalNet = myOwnOrdersNet + incomingNet + outgoingNet;
+
+    return {
+      myOwnOrdersNet,
+      myOwnOrdersCount,
+      incomingNet,
+      incomingCount: inMonthDeals.length,
+      outgoingNet,
+      outgoingCount: outMonthDeals.length,
+      totalNet,
+    };
+  }, [allTrades, merchantDealKpis, tradeNet]);
+
+  // Date/Month labels
+  const now = new Date();
+  const monthKeys = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const curMo = t(monthKeys[now.getMonth()] as any);
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMo = t(monthKeys[prevDate.getMonth()] as any);
+
   return (
     <div className="tracker-root" dir={t.isRTL ? 'rtl' : 'ltr'} style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }}>
       {/* KPI Bands */}
@@ -331,14 +401,14 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           <div className="kpi-band-title">{t('tradingVolume')}</div>
           <div className="kpi-band-cols">
             <div>
-              <div className="kpi-period">{t('oneDay')}</div>
-              <div className="kpi-cell-val t1v">{fmtQWithUnit(d1.rev)}</div>
-              <div className="kpi-cell-sub">{d1.count} {t('trades')} · {fmtU(d1.qty, 0)} USDT</div>
+              <div className="kpi-period">{curMo}</div>
+              <div className="kpi-cell-val t1v">{fmtQWithUnit(dM.rev, settings.currency, wacop)}</div>
+              <div className="kpi-cell-sub">{dM.count} {t('trades')} · {fmtU(dM.qty, 0)} USDT</div>
             </div>
             <div>
-              <div className="kpi-period">{t('sevenDays')}</div>
-              <div className="kpi-cell-val t1v">{fmtQWithUnit(d7.rev)}</div>
-              <div className="kpi-cell-sub">{d7.count} {t('trades')} · {fmtU(d7.qty, 0)} USDT</div>
+              <div className="kpi-period">{prevMo}</div>
+              <div className="kpi-cell-val t1v">{fmtQWithUnit(dL.rev, settings.currency, wacop)}</div>
+              <div className="kpi-cell-sub">{dL.count} {t('trades')} · {fmtU(dL.qty, 0)} USDT</div>
             </div>
           </div>
         </div>
@@ -346,40 +416,45 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           <div className="kpi-band-title">{t('netProfit')}</div>
           <div className="kpi-band-cols">
             <div>
-              <div className="kpi-period">{t('oneDay')}</div>
-              <div className={`kpi-cell-val ${d1.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(d1.net)}</div>
-              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(d1.fee)}</div>
+              <div className="kpi-period">{curMo}</div>
+              <div className={`kpi-cell-val ${dM.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dM.net, settings.currency, wacop)}</div>
+              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dM.fee, settings.currency, wacop)}</div>
               <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
             </div>
             <div>
-              <div className="kpi-period">{t('sevenDays')}</div>
-              <div className={`kpi-cell-val ${d7.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(d7.net)}</div>
-              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(d7.fee)}</div>
+              <div className="kpi-period">{prevMo}</div>
+              <div className={`kpi-cell-val ${dL.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dL.net, settings.currency, wacop)}</div>
+              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dL.fee, settings.currency, wacop)}</div>
               <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
             </div>
           </div>
           {/* Incoming deals net profit */}
-          {merchantDealKpis && merchantDealKpis.inCount > 0 && (
+          {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
             <div style={{ marginTop: 6, padding: '5px 8px', borderRadius: 6, background: 'color-mix(in srgb, var(--good) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--good) 15%, transparent)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)' }}>📥 {t('incomingDealsLabel')} ({merchantDealKpis.inCount})</span>
-                <span className={`mono ${merchantDealKpis.inNet >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 12, fontWeight: 800 }}>
-                  {merchantDealKpis.inNet >= 0 ? '+' : ''}{fmtQWithUnit(merchantDealKpis.inNet)}
+                <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)' }}>
+                  📥 {t('incomingDealsLabel')} ({rangeMerchantKpis.inCount}){isAdminView ? ` · ${t('myCutLabel')}` : ''}
+                </span>
+                <span className={`mono ${rangeMerchantKpis.inMyShare >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 12, fontWeight: 800 }}>
+                  {rangeMerchantKpis.inMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.inMyShare)}
                 </span>
               </div>
               <div style={{ fontSize: 8, color: 'var(--muted)', marginTop: 2 }}>
-                {t('myCutLabel')}: {fmtQWithUnit(merchantDealKpis.dealDetails.filter(d => d.direction === 'incoming').reduce((s, d) => s + d.myShare, 0))}
+                {t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.inNet)}
               </div>
             </div>
           )}
           {/* Combined total */}
-          {merchantDealKpis && merchantDealKpis.inCount > 0 && (
-            <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderTop: '1px solid var(--line)' }}>
-              <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('combinedTotal')}</span>
-              <span className={`mono ${(dR.net + merchantDealKpis.inNet) >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 13, fontWeight: 800 }}>
-                {(dR.net + merchantDealKpis.inNet) >= 0 ? '+' : ''}{fmtQWithUnit(dR.net + merchantDealKpis.inNet)}
-              </span>
-            </div>
+          {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
+            <>
+              <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderTop: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('combinedTotal')}</span>
+                <span className={`mono ${(dR.net + rangeMerchantKpis.inMyShare) >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 13, fontWeight: 800 }}>
+                  {(dR.net + rangeMerchantKpis.inMyShare) >= 0 ? '+' : ''}{fmtQWithUnit(dR.net + rangeMerchantKpis.inMyShare)}
+                </span>
+              </div>
+              <div className="kpi-cell-sub" style={{ marginTop: 2, fontSize: 8 }}>{rangeLabel(settings.range)} {t('total')}</div>
+            </>
           )}
         </div>
       </div>
@@ -391,7 +466,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             <span className="kpi-badge" style={badgeStyle(dR.net >= 0 ? 'good' : 'bad')}>{rLabel}</span>
           </div>
           <div className="kpi-lbl">{t('netProfitLabel')}</div>
-          <div className={`kpi-val ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net)}</div>
+          <div className={`kpi-val ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net, settings.currency, wacop)}</div>
           <div className="kpi-sub">{dR.count} {t('trades')} · {fmtQ(dR.rev)} {t('revSuffix')}</div>
         </div>
         <div className="kpi-card">
@@ -444,7 +519,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
                 </span>
               </div>
               <div className="kpi-lbl">{t('cashAvailable')}</div>
-              <div className="kpi-val" style={{ color: 'var(--warn)' }}>{fmtQWithUnit(totalCash)}</div>
+              <div className="kpi-val" style={{ color: 'var(--warn)' }}>{fmtQWithUnit(totalCash, settings.currency, wacop)}</div>
               <div className="kpi-sub">
                 {!isAdminView && <span style={{ fontSize: 9, color: 'var(--brand)', fontWeight: 600 }}>{t('openCashMgmt')}</span>}
               </div>
@@ -485,15 +560,15 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             <span className="kpi-badge" style={{ color: 'var(--good)', borderColor: 'color-mix(in srgb,var(--good) 30%,transparent)', background: 'color-mix(in srgb,var(--good) 10%,transparent)' }}>{t('net')}</span>
           </div>
           <div className="kpi-lbl">{t('netPosition')}</div>
-          <div className="kpi-val good">{fmtQWithUnit(stCost + num(state.cashQAR, 0))}</div>
-          <div className="kpi-sub">{t('stock')} {fmtQWithUnit(stCost)} + {t('cash')} {fmtQWithUnit(num(state.cashQAR, 0))}</div>
+          <div className="kpi-val good">{fmtQWithUnit(stCost + num(state.cashQAR, 0), settings.currency, wacop)}</div>
+          <div className="kpi-sub">{t('stock')} {fmtQWithUnit(stCost, settings.currency, wacop)} + {t('cash')} {fmtQWithUnit(num(state.cashQAR, 0), settings.currency, wacop)}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-head">
             <span className="kpi-badge" style={{ color: 'var(--muted)', borderColor: 'color-mix(in srgb,var(--muted) 30%,transparent)', background: 'color-mix(in srgb,var(--muted) 10%,transparent)' }}>{state.batches.length} {t('batchSuffix')}</span>
           </div>
           <div className="kpi-lbl">{t('stockCostEst')}</div>
-          <div className="kpi-val" style={{ color: 'var(--text)' }}>{fmtQWithUnit(stCost)}</div>
+          <div className="kpi-val" style={{ color: 'var(--text)' }}>{fmtQWithUnit(stCost, settings.currency, wacop)}</div>
           <div className="kpi-sub">{t('avPrice')} {wacop ? fmtP(wacop) + ' QAR' : '—'}</div>
         </div>
       </div>
@@ -585,67 +660,36 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           );
         })()}
 
-        {/* Trade Velocity */}
-        {(() => {
-          const velocity = d7.count > 0 ? d7.count / 7 : 0;
-          const isExpanded = expandedNewKpi === 'velocity';
-          return (
-            <div className="kpi-card" style={{ cursor: 'pointer', position: 'relative' }} onClick={() => setExpandedNewKpi(isExpanded ? null : 'velocity')}>
-              <div className="kpi-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="kpi-badge" style={{ color: 'var(--brand)', borderColor: 'color-mix(in srgb,var(--brand) 30%,transparent)', background: 'var(--brand3)' }}>
-                  📅
-                </span>
-              </div>
-              <div className="kpi-lbl">{t('tradeVelocity')}</div>
-              <div className="kpi-val" style={{ color: 'var(--brand)' }}>{fmtPrice(velocity)}</div>
-              <div className="kpi-sub">{t('tradeVelocitySub')}</div>
-              <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-                <span className="kpi-badge" style={{ fontSize: 9, padding: '1px 6px', color: 'var(--brand)', borderColor: 'color-mix(in srgb,var(--brand) 30%,transparent)', background: 'color-mix(in srgb,var(--brand) 10%,transparent)' }}>7D avg</span>
-                <span className="kpi-badge" style={{ fontSize: 9, padding: '1px 6px', color: 'var(--muted)', borderColor: 'color-mix(in srgb,var(--muted) 30%,transparent)', background: 'color-mix(in srgb,var(--muted) 10%,transparent)' }}>{t('orders')}</span>
-                <span style={{ fontSize: 9, color: 'var(--warn)', marginLeft: 'auto' }}>💡 {isExpanded ? t('collapseLbl') : t('tapExpand')}</span>
-              </div>
-              {isExpanded && (
-                <div style={{ marginTop: 8, padding: '8px 10px', borderTop: '1px solid var(--line)', fontSize: 11, lineHeight: 1.6, color: 'var(--t3)' }}>
-                  <p>Average number of completed trades per day over the last 7 days.</p>
-                  <p style={{ marginTop: 4 }}><strong style={{ color: 'var(--warn)' }}>Why:</strong> Higher velocity means more active trading and faster capital turnover.</p>
-                  <div style={{ marginTop: 6, padding: '4px 8px', borderRadius: 4, background: 'var(--panel2)', fontFamily: 'monospace', fontSize: 10, color: 'var(--good)' }}>
-                    = 7d trade count ÷ 7
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })()}
 
         {/* Outgoing Deals Net Profit */}
-        {merchantDealKpis && (
+        {rangeMerchantKpis && (
           <div className="kpi-card">
             <div className="kpi-head">
               <span className="kpi-badge" style={{ color: 'var(--brand)', borderColor: 'color-mix(in srgb,var(--brand) 30%,transparent)', background: 'color-mix(in srgb,var(--brand) 10%,transparent)' }}>
-                📤 {merchantDealKpis.outCount} deals
+                📤 {rangeMerchantKpis.outCount} deals
               </span>
             </div>
-            <div className="kpi-lbl">{t('outgoingNet')}</div>
-            <div className={`kpi-val ${merchantDealKpis.outNet >= 0 ? 'good' : 'bad'}`}>
-              {merchantDealKpis.outNet >= 0 ? '+' : ''}{fmtQWithUnit(merchantDealKpis.outNet)}
+            <div className="kpi-lbl">{isAdminView ? `${t('outgoingNet')} · ${t('myCutLabel')}` : t('outgoingNet')}</div>
+            <div className={`kpi-val ${rangeMerchantKpis.outMyShare >= 0 ? 'good' : 'bad'}`}>
+              {rangeMerchantKpis.outMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.outMyShare)}
             </div>
-            <div className="kpi-sub">{t('myCutLabel')}: {fmtQWithUnit(merchantDealKpis.dealDetails.filter(d => d.direction === 'outgoing').reduce((s, d) => s + d.myShare, 0))}</div>
+            <div className="kpi-sub">{t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.outNet)}</div>
           </div>
         )}
 
         {/* Incoming Deals Net Profit */}
-        {merchantDealKpis && (
+        {rangeMerchantKpis && (
           <div className="kpi-card">
             <div className="kpi-head">
               <span className="kpi-badge" style={{ color: 'var(--good)', borderColor: 'color-mix(in srgb,var(--good) 30%,transparent)', background: 'color-mix(in srgb,var(--good) 10%,transparent)' }}>
-                📥 {merchantDealKpis.inCount} deals
+                📥 {rangeMerchantKpis.inCount} deals
               </span>
             </div>
-            <div className="kpi-lbl">{t('incomingNet')}</div>
-            <div className={`kpi-val ${merchantDealKpis.inNet >= 0 ? 'good' : 'bad'}`}>
-              {merchantDealKpis.inNet >= 0 ? '+' : ''}{fmtQWithUnit(merchantDealKpis.inNet)}
+            <div className="kpi-lbl">{isAdminView ? `${t('incomingNet')} · ${t('myCutLabel')}` : t('incomingNet')}</div>
+            <div className={`kpi-val ${rangeMerchantKpis.inMyShare >= 0 ? 'good' : 'bad'}`}>
+              {rangeMerchantKpis.inMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.inMyShare)}
             </div>
-            <div className="kpi-sub">{t('myCutLabel')}: {fmtQWithUnit(merchantDealKpis.dealDetails.filter(d => d.direction === 'incoming').reduce((s, d) => s + d.myShare, 0))}</div>
+            <div className="kpi-sub">{t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.inNet)}</div>
           </div>
         )}
       </div>
@@ -686,11 +730,11 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         <div className="panel">
           <div className="panel-head"><h2>{t('periodStats')}</h2><span className="pill">{rLabel}</span></div>
           <div className="panel-body">
-            <div className="prev-row"><span className="muted">{t('volume')}</span><strong className="mono t1v">{fmtQWithUnit(dR.rev)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('cost')}</span><strong className="mono">{fmtQWithUnit(dR.rev - dR.net - dR.fee)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtQWithUnit(dR.fee)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('netProfitLabel')}</span><strong className={`mono ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('avgMargin')}</span><strong className="mono" style={{ color: 'var(--t3)' }}>{fmtPct(dR.avgMgn)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('volume')}</span><strong className="mono t1v">{fmtQWithUnit(dR.rev, settings.currency, wacop)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('cost')}</span><strong className="mono">{fmtQWithUnit(dR.rev - dR.net - dR.fee, settings.currency, wacop)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtQWithUnit(dR.fee, settings.currency, wacop)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('netProfitLabel')}</span><strong className={`mono ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net, settings.currency, wacop)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('avgMargin')}</span><strong className="mono" style={{ color: 'var(--t3)' }}>{fmtPct(avgM)}</strong></div>
             <div className="prev-row"><span className="muted">{t('trades')}</span><strong className="mono">{dR.count}</strong></div>
           </div>
         </div>

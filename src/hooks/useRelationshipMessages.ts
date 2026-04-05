@@ -6,15 +6,9 @@ import { useEffect } from 'react';
 export interface Message {
   id: string;
   relationship_id: string;
-  sender_user_id: string;
-  sender_merchant_id: string;
-  sender_id: string; // alias for sender_merchant_id
-  body: string;
-  content: string; // alias for body
-  message_type: string;
-  metadata: Record<string, unknown>;
-  is_read: boolean;
-  read_at: string | null; // derived from is_read
+  sender_id: string;
+  content: string;
+  read_at: string | null;
   created_at: string;
   expires_at?: string | null;
 }
@@ -31,12 +25,7 @@ export function useRelationshipMessages(relationshipId: string) {
         .eq('relationship_id', relationshipId)
         .order('created_at', { ascending: true });
       if (error) throw error;
-      return (data || []).map((m: any) => ({
-        ...m,
-        sender_id: m.sender_merchant_id,
-        content: m.body,
-        read_at: m.is_read ? m.created_at : null,
-      })) as Message[];
+      return data || [];
     },
     enabled: !!relationshipId,
   });

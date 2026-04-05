@@ -1,13 +1,5 @@
 import { useState, useEffect } from 'react';
 
-
-const supabaseProjectRef =
-  (import.meta.env.VITE_SUPABASE_PROJECT_ID as string | undefined) ??
-  (((import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "")
-    .replace(/^https?:\/\//, "")
-    .split(".")[0]);
-
-const supabaseSessionStorageKey = `sb-${supabaseProjectRef}-auth-token`;
 /**
  * Dev-only floating panel showing OAuth diagnostics.
  * Only renders when import.meta.env.DEV is true.
@@ -35,7 +27,7 @@ export function AuthDiagnostics() {
           : '—',
         returnPath: sessionStorage.getItem('oauth:return-path') || '—',
         currentPath: window.location.pathname + window.location.search,
-        hasSession: localStorage.getItem(supabaseSessionStorageKey) ? 'Yes' : 'No',
+        hasSession: localStorage.getItem('sb-dozmqtzlinfqjrropipb-auth-token') ? 'Yes' : 'No',
       });
     };
 

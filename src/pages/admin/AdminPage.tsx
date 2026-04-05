@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState, lazy, Suspense } from 'react';
 import { Loader2, Shield, LayoutDashboard, Users, FileText, CheckCircle, Bell, Cloud } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -14,19 +13,8 @@ import AdminApprovalsPage from './AdminApprovalsPage';
 
 export default function AdminPage() {
   const { data: isAdmin, isLoading: roleLoading } = useIsAdmin();
-  const location = useLocation();
   const [workspaceUserId, setWorkspaceUserId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('overview');
-
-  useEffect(() => {
-    if (location.pathname === '/admin/approvals') {
-      setActiveTab('approvals');
-      return;
-    }
-    if (location.pathname === '/admin') {
-      setActiveTab(prev => prev || 'overview');
-    }
-  }, [location.pathname]);
 
   if (roleLoading) {
     return (

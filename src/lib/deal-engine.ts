@@ -252,8 +252,10 @@ export function calculateAgreementAllocation(
   orderRevenue: number,
   orderCost: number,
   orderFee: number,
+  options?: { isOperator?: boolean },
 ): { partnerAmount: number; merchantAmount: number; netProfit: number } {
   const netProfit = orderRevenue - orderCost - orderFee;
+  const isOperator = options?.isOperator ?? true;
 
   // ── Operator Priority: fee first, then capital-weighted split ──
   if (agreement.agreement_type === 'operator_priority' && agreement.operator_ratio != null) {
@@ -263,10 +265,9 @@ export function calculateAgreementAllocation(
       operatorContribution: agreement.operator_contribution ?? 0,
       lenderContribution: agreement.lender_contribution ?? 0,
     });
-    // Convention: "merchant" = operator, "partner" = lender
     return {
-      partnerAmount: Math.round(result.lenderTotal * 100) / 100,
-      merchantAmount: Math.round(result.operatorTotal * 100) / 100,
+      partnerAmount: Math.round((isOperator ? result.lenderTotal : result.operatorTotal) * 100) / 100,
+      merchantAmount: Math.round((isOperator ? result.operatorTotal : result.lenderTotal) * 100) / 100,
       netProfit: Math.round(netProfit * 100) / 100,
     };
   }
@@ -285,7 +286,9 @@ export function calculateAgreementAllocation(
  * Check if a profit share agreement is currently active and usable.
  */
 export function isAgreementActive(agreement: ProfitShareAgreement): boolean {
-  if (agreement.status !== 'approved') return false;
+  // Accept both `approved` (current canonical) and legacy `active`.
+  const normalizedStatus = String((agreement as { status?: string }).status || '').toLowerCase();
+  if (normalizedStatus !== 'approved' && normalizedStatus !== 'active') return false;
   const now = new Date();
   const from = new Date(agreement.effective_from);
   if (from > now) return false;
@@ -303,7 +306,9 @@ export function getAgreementLabel(agreement: ProfitShareAgreement): string {
   if (agreement.agreement_type === 'operator_priority') {
     return `Operator Priority ${agreement.operator_ratio ?? 0}% fee`;
   }
-  return `Profit Share ${agreement.partner_ratio}/${agreement.merchant_ratio}`;
+  const settlementWay = agreement.settlement_way ? ` · ${agreement.settlement_way}` : '';
+  const investedCapital = agreement.invested_capital != null ? ` · cap ${agreement.invested_capital}` : '';
+  return `Profit Share ${agreement.partner_ratio}/${agreement.merchant_ratio}${investedCapital}${settlementWay}`;
 }
 
 // ─── Deal Status Transitions ────────────────────────────────────────
@@ -329,7 +334,7 @@ export function calculateOutstanding(deal: MerchantDeal): {
 } {
   const principal = deal.amount;
   const expectedReturn = deal.expected_return || 0;
-  const realizedPnl = deal.realized_pnl ?? 0;
+  const realizedPnl = deal.realized_pnl || 0;
   const outstanding = principal + expectedReturn - realizedPnl;
   const isOverdue = deal.due_date ? new Date(deal.due_date) < new Date() : false;
 

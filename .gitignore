@@ -31,16 +31,4 @@ android/build
 ios/App/App/public
 ios/App/build
 ios/DerivedData
-.env
-.env.local
-.env.production
-.claude/
-caches/
-.gradle/
-android/.gradle/
-android/app/build/
-android/build/
-supabase/.temp/
-supabase/deferred_migration_dependency_map.csv
-supabase/deferred_overlap_report.csv
-.vercel
+.dyad/

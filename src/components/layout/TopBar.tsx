@@ -27,7 +27,7 @@ function titleFromPath(pathname: string, t: ReturnType<typeof useT>): { title: s
 const RANGES = [
   { id: 'today', label: '1D' },
   { id: '7d', label: '7D' },
-  { id: '30d', label: '30D' },
+  { id: 'this_month', label: '30D' },
   { id: 'all', label: 'ALL' },
 ] as const;
 
@@ -45,7 +45,14 @@ export function TopBar({ isMobile = false, onMenuClick }: TopBarProps) {
   const [profileOpen, setProfileOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-20 flex items-center gap-1 md:gap-2 border-b border-border bg-background/95 backdrop-blur-sm px-2 md:px-3 py-1.5">
+    <header
+      className="sticky top-0 z-20 flex items-center gap-1 md:gap-2 border-b border-border bg-background/95 backdrop-blur-sm px-2 md:px-3 py-1.5"
+      style={isMobile ? {
+        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 6px)',
+        paddingLeft: 'max(8px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(8px, env(safe-area-inset-right, 0px))',
+      } : undefined}
+    >
       {isMobile && onMenuClick && (
         <button onClick={onMenuClick} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
           <Menu className="h-4 w-4" />

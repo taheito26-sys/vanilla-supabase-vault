@@ -39,9 +39,10 @@ function mergeArrayById<T>(base: T[] | undefined, incoming: T[] | undefined): T[
   return Array.from(out.values());
 }
 
+/** Merge multiple snapshot states into one merchant-scoped view. */
 export function mergeTrackerStatesForMerchant(rows: TrackerSnapshotRow[]): Partial<TrackerState> | null {
   const validRows = rows
-    .filter((row) => row.state && typeof row.state === 'object')
+    .filter(r => r.state && typeof r.state === 'object')
     .sort((a, b) => {
       const at = new Date(a.updated_at || 0).getTime();
       const bt = new Date(b.updated_at || 0).getTime();
@@ -64,7 +65,6 @@ export function mergeTrackerStatesForMerchant(rows: TrackerSnapshotRow[]): Parti
       cashHistory: mergeArrayById(merged.cashHistory, Array.isArray(state.cashHistory) ? state.cashHistory : []),
     };
   }
-
   return merged;
 }
 
@@ -141,21 +141,21 @@ export async function loadTrackerStateFromCloud(): Promise<Partial<TrackerState>
     .maybeSingle();
 
   let cloudState: Partial<TrackerState> | null = null;
-  const merchantId = (myMerchantProfile as { merchant_id?: string } | null)?.merchant_id;
+  const merchantId = (myMerchantProfile as any)?.merchant_id as string | undefined;
 
   if (merchantId) {
     const { data: merchantUsers } = await supabase
       .from('merchant_profiles')
       .select('user_id')
       .eq('merchant_id', merchantId);
-    const merchantUserIds = Array.from(new Set((merchantUsers || []).map((row: { user_id: string | null }) => row.user_id).filter(Boolean))) as string[];
+    const merchantUserIds = Array.from(new Set((merchantUsers || []).map((m: any) => m.user_id).filter(Boolean)));
 
     const { data, error } = await supabase
       .from('tracker_snapshots' as any)
       .select('state, updated_at, user_id')
       .in('user_id', merchantUserIds.length ? merchantUserIds : [user.id]);
     if (!error && data) {
-      cloudState = mergeTrackerStatesForMerchant(data as TrackerSnapshotRow[]);
+      cloudState = mergeTrackerStatesForMerchant(data as unknown as TrackerSnapshotRow[]);
     }
   } else {
     const { data, error } = await supabase

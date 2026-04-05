@@ -35,6 +35,7 @@ export function gasLoadConfig(): void {
     _gasLastSync = (cfg && cfg.lastSync) ? cfg.lastSync : 0;
     localStorage.setItem(GAS_CFG_KEY, JSON.stringify({ url: _gasUrl, lastSync: _gasLastSync, ver: 'v2026-03-01' }));
   } catch {}
+  // Load session
   try {
     const sessRaw = localStorage.getItem(GAS_SESSION_KEY);
     if (sessRaw) {
@@ -57,6 +58,7 @@ export function setGasUrl(url: string): void { _gasUrl = url; }
 export function getGasLastSync(): number { return _gasLastSync; }
 export function setGasLastSync(ts: number): void { _gasLastSync = ts; }
 
+// ── Session management ──
 export function getGasSession(): GasSession | null { return _gasSession; }
 export function isCloudLoggedIn(): boolean { return !!(_gasSession && _gasSession.email && _gasSession.token); }
 
@@ -96,9 +98,11 @@ export async function rawGasPost(payloadObj: Record<string, unknown>): Promise<a
   return asJson;
 }
 
+/** Auto-inject email+token into all authenticated calls */
 export async function gasPost(payloadObj: Record<string, unknown>): Promise<any> {
   gasLoadConfig();
   const action = String(payloadObj.action || '').toLowerCase();
+  // login & register don't need existing session
   if (action !== 'login' && action !== 'register') {
     if (!_gasSession) throw new Error('Not logged in to Cloud. Sign in first.');
     payloadObj = { ...payloadObj, email: _gasSession.email, token: _gasSession.token };
@@ -106,17 +110,24 @@ export async function gasPost(payloadObj: Record<string, unknown>): Promise<any>
   return rawGasPost(payloadObj);
 }
 
+/** Post with explicit credentials (for admin acting on behalf of a user) */
 export async function gasPostAs(email: string, token: string, payloadObj: Record<string, unknown>): Promise<any> {
   gasLoadConfig();
   return rawGasPost({ ...payloadObj, email, token });
 }
 
+/**
+ * Auto-authenticate with GAS using the user's existing app credentials.
+ * Tries login first; if it fails, auto-registers then logs in.
+ * Uses email as the username and a deterministic password derived from user_id.
+ */
 export async function autoAuthenticateCloud(email: string, userId: string, displayName?: string): Promise<boolean> {
   const result = await autoAuthenticateCloudWithDetails(email, userId, displayName);
   return result.ok;
 }
 
 function buildPasswordCandidates(userId: string): string[] {
+  // Keep newest scheme first, then legacy patterns for backward compatibility.
   return [
     `taheito_${userId}_cloud_2026`,
     `taheito_${userId}_cloud`,
@@ -130,13 +141,17 @@ export async function autoAuthenticateCloudWithDetails(
   displayName?: string,
 ): Promise<CloudAuthResult> {
   if (!email || !userId) return { ok: false, reason: 'Missing email or user id.' };
+  
+  // If already logged in with this email, skip
   if (_gasSession && _gasSession.email === email && _gasSession.token) return { ok: true };
   const passwordCandidates = buildPasswordCandidates(userId);
-
+  
   gasLoadConfig();
 
+  // Stored session for another account causes bad state during account switches.
   if (_gasSession && _gasSession.email !== email) clearCloudSession();
-
+  
+  // Try login using known password patterns first.
   for (const pw of passwordCandidates) {
     try {
       const res = await rawGasPost({ action: 'login', email, password: pw });
@@ -144,9 +159,12 @@ export async function autoAuthenticateCloudWithDetails(
         saveSession(email, res.token, displayName || res.user?.name);
         return { ok: true };
       }
-    } catch {}
+    } catch {
+      // Continue to next candidate.
+    }
   }
-
+  
+  // Auto-register with current password scheme.
   const currentPassword = passwordCandidates[0];
   try {
     const res = await rawGasPost({
@@ -160,6 +178,7 @@ export async function autoAuthenticateCloudWithDetails(
       return { ok: true };
     }
   } catch (registerError: unknown) {
+    // Registration might fail if account exists with different password.
     for (const pw of passwordCandidates) {
       try {
         const res = await rawGasPost({ action: 'login', email, password: pw });
@@ -167,17 +186,20 @@ export async function autoAuthenticateCloudWithDetails(
           saveSession(email, res.token, displayName || res.user?.name);
           return { ok: true };
         }
-      } catch {}
+      } catch {
+        // Keep trying all known patterns.
+      }
     }
     const reason = registerError instanceof Error
       ? registerError.message
       : 'Cloud authentication failed after login/register attempts.';
     return { ok: false, reason };
   }
-
+  
   return { ok: false, reason: 'Cloud authentication failed: backend did not return a token.' };
 }
 
+/** Register a new cloud account */
 export async function cloudRegister(email: string, password: string, name?: string): Promise<any> {
   gasLoadConfig();
   const res = await rawGasPost({ action: 'register', email, password, name: name || email.split('@')[0] });
@@ -187,6 +209,7 @@ export async function cloudRegister(email: string, password: string, name?: stri
   return res;
 }
 
+/** Login to cloud account */
 export async function cloudLogin(email: string, password: string): Promise<any> {
   gasLoadConfig();
   const res = await rawGasPost({ action: 'login', email, password });

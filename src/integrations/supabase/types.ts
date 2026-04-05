@@ -44,6 +44,63 @@ export type Database = {
         }
         Relationships: []
       }
+      capital_transfers: {
+        Row: {
+          amount: number
+          cost_basis: number
+          created_at: string
+          currency: string
+          deal_id: string | null
+          direction: string
+          id: string
+          note: string | null
+          relationship_id: string
+          total_cost: number
+          transferred_by: string
+        }
+        Insert: {
+          amount: number
+          cost_basis?: number
+          created_at?: string
+          currency?: string
+          deal_id?: string | null
+          direction: string
+          id?: string
+          note?: string | null
+          relationship_id: string
+          total_cost?: number
+          transferred_by: string
+        }
+        Update: {
+          amount?: number
+          cost_basis?: number
+          created_at?: string
+          currency?: string
+          deal_id?: string | null
+          direction?: string
+          id?: string
+          note?: string | null
+          relationship_id?: string
+          total_cost?: number
+          transferred_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "capital_transfers_deal_id_fkey"
+            columns: ["deal_id"]
+            isOneToOne: false
+            referencedRelation: "merchant_deals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "capital_transfers_relationship_id_fkey"
+            columns: ["relationship_id"]
+            isOneToOne: false
+            referencedRelation: "merchant_relationships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cash_accounts: {
         Row: {
           bank_name: string | null
@@ -51,6 +108,7 @@ export type Database = {
           created_at: number
           currency: string
           id: string
+          is_merchant_account: boolean | null
           last_reconciled: number | null
           name: string
           notes: string | null
@@ -65,6 +123,7 @@ export type Database = {
           created_at: number
           currency: string
           id: string
+          is_merchant_account?: boolean | null
           last_reconciled?: number | null
           name: string
           notes?: string | null
@@ -79,6 +138,7 @@ export type Database = {
           created_at?: number
           currency?: string
           id?: string
+          is_merchant_account?: boolean | null
           last_reconciled?: number | null
           name?: string
           notes?: string | null
@@ -93,6 +153,7 @@ export type Database = {
         Row: {
           account_id: string
           amount: number
+          batch_id: string | null
           contra_account_id: string | null
           created_at: string
           currency: string
@@ -108,6 +169,7 @@ export type Database = {
         Insert: {
           account_id: string
           amount?: number
+          batch_id?: string | null
           contra_account_id?: string | null
           created_at?: string
           currency: string
@@ -123,6 +185,7 @@ export type Database = {
         Update: {
           account_id?: string
           amount?: number
+          batch_id?: string | null
           contra_account_id?: string | null
           created_at?: string
           currency?: string
@@ -196,6 +259,39 @@ export type Database = {
           },
         ]
       }
+      daily_reference_rates: {
+        Row: {
+          created_at: string
+          id: string
+          rate_date: string
+          recorded_by: string
+          source: string
+          total_cost_basis_qar: number
+          total_usdt_stock: number
+          wacop_rate: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          rate_date: string
+          recorded_by: string
+          source?: string
+          total_cost_basis_qar?: number
+          total_usdt_stock?: number
+          wacop_rate: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          rate_date?: string
+          recorded_by?: string
+          source?: string
+          total_cost_basis_qar?: number
+          total_usdt_stock?: number
+          wacop_rate?: number
+        }
+        Relationships: []
+      }
       deal_capital_ledger: {
         Row: {
           amount: number
@@ -205,6 +301,7 @@ export type Database = {
           id: string
           initiated_by: string
           note: string | null
+          original_entry_id: string | null
           period_id: string | null
           pool_balance_after: number
           relationship_id: string
@@ -218,6 +315,7 @@ export type Database = {
           id?: string
           initiated_by: string
           note?: string | null
+          original_entry_id?: string | null
           period_id?: string | null
           pool_balance_after?: number
           relationship_id: string
@@ -231,6 +329,7 @@ export type Database = {
           id?: string
           initiated_by?: string
           note?: string | null
+          original_entry_id?: string | null
           period_id?: string | null
           pool_balance_after?: number
           relationship_id?: string
@@ -245,6 +344,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "deal_capital_ledger_original_entry_id_fkey"
+            columns: ["original_entry_id"]
+            isOneToOne: false
+            referencedRelation: "deal_capital_ledger"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "deal_capital_ledger_period_id_fkey"
             columns: ["period_id"]
             isOneToOne: false
@@ -256,168 +362,6 @@ export type Database = {
             columns: ["relationship_id"]
             isOneToOne: false
             referencedRelation: "merchant_relationships"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      ledger_import_batches: {
-        Row: {
-          completed_at: string | null
-          created_at: string
-          error_message: string | null
-          id: string
-          needs_review_count: number
-          parsed_count: number
-          skipped_count: number
-          source_file_name: string | null
-          source_type: string
-          status: string
-          total_rows: number
-          uploader_merchant_id: string
-          uploader_user_id: string
-        }
-        Insert: {
-          completed_at?: string | null
-          created_at?: string
-          error_message?: string | null
-          id?: string
-          needs_review_count?: number
-          parsed_count?: number
-          skipped_count?: number
-          source_file_name?: string | null
-          source_type: string
-          status?: string
-          total_rows?: number
-          uploader_merchant_id: string
-          uploader_user_id: string
-        }
-        Update: {
-          completed_at?: string | null
-          created_at?: string
-          error_message?: string | null
-          id?: string
-          needs_review_count?: number
-          parsed_count?: number
-          skipped_count?: number
-          source_file_name?: string | null
-          source_type?: string
-          status?: string
-          total_rows?: number
-          uploader_merchant_id?: string
-          uploader_user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "ledger_import_batches_uploader_user_id_fkey"
-            columns: ["uploader_user_id"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      ledger_import_rows: {
-        Row: {
-          batch_id: string
-          confidence: number
-          computed_qar_amount: number | null
-          created_at: string
-          direction: string | null
-          id: string
-          intermediary: string | null
-          line_index: number
-          normalized_hash: string
-          normalized_text: string
-          parse_result: string | null
-          parsed_type: string
-          rate: number | null
-          raw_line: string
-          save_enabled: boolean
-          saved_to_deal_id: string | null
-          selected_merchant_id: string | null
-          selected_merchant_name: string | null
-          skip_reason: string | null
-          source_file_name: string | null
-          source_type: string
-          status: string
-          updated_at: string
-          uploader_user_id: string
-          usdt_amount: number | null
-        }
-        Insert: {
-          batch_id: string
-          confidence?: number
-          computed_qar_amount?: number | null
-          created_at?: string
-          direction?: string | null
-          id?: string
-          intermediary?: string | null
-          line_index: number
-          normalized_hash: string
-          normalized_text: string
-          parse_result?: string | null
-          parsed_type?: string
-          rate?: number | null
-          raw_line: string
-          save_enabled?: boolean
-          saved_to_deal_id?: string | null
-          selected_merchant_id?: string | null
-          selected_merchant_name?: string | null
-          skip_reason?: string | null
-          source_file_name?: string | null
-          source_type: string
-          status?: string
-          updated_at?: string
-          uploader_user_id: string
-          usdt_amount?: number | null
-        }
-        Update: {
-          batch_id?: string
-          confidence?: number
-          computed_qar_amount?: number | null
-          created_at?: string
-          direction?: string | null
-          id?: string
-          intermediary?: string | null
-          line_index?: number
-          normalized_hash?: string
-          normalized_text?: string
-          parse_result?: string | null
-          parsed_type?: string
-          rate?: number | null
-          raw_line?: string
-          save_enabled?: boolean
-          saved_to_deal_id?: string | null
-          selected_merchant_id?: string | null
-          selected_merchant_name?: string | null
-          skip_reason?: string | null
-          source_file_name?: string | null
-          source_type?: string
-          status?: string
-          updated_at?: string
-          uploader_user_id?: string
-          usdt_amount?: number | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "ledger_import_rows_batch_id_fkey"
-            columns: ["batch_id"]
-            isOneToOne: false
-            referencedRelation: "ledger_import_batches"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "ledger_import_rows_saved_to_deal_id_fkey"
-            columns: ["saved_to_deal_id"]
-            isOneToOne: false
-            referencedRelation: "merchant_deals"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "ledger_import_rows_uploader_user_id_fkey"
-            columns: ["uploader_user_id"]
-            isOneToOne: false
-            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -477,6 +421,7 @@ export type Database = {
           currency: string
           deal_type: string
           id: string
+          metadata: Json | null
           notes: string | null
           realized_pnl: number
           relationship_id: string
@@ -492,6 +437,7 @@ export type Database = {
           currency?: string
           deal_type?: string
           id?: string
+          metadata?: Json | null
           notes?: string | null
           realized_pnl?: number
           relationship_id: string
@@ -507,6 +453,7 @@ export type Database = {
           currency?: string
           deal_type?: string
           id?: string
+          metadata?: Json | null
           notes?: string | null
           realized_pnl?: number
           relationship_id?: string
@@ -2014,6 +1961,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      approve_settlement: {
+        Args: { _settlement_id: string }
+        Returns: undefined
+      }
       current_merchant_id: { Args: never; Returns: string }
       deal_reinvested_pool: { Args: { _deal_id: string }; Returns: number }
       fn_chat_mark_read: {
@@ -2093,6 +2044,14 @@ export type Database = {
       os_send_notification: {
         Args: { _message_id: string; _room_id: string; _urgency?: string }
         Returns: number
+      }
+      reject_settlement: {
+        Args: { _actor_id: string; _settlement_id: string }
+        Returns: undefined
+      }
+      set_merchant_deal_status: {
+        Args: { _deal_id: string; _status: string }
+        Returns: undefined
       }
     }
     Enums: {

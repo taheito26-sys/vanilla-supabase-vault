@@ -5,7 +5,7 @@ ALTER TABLE public.profit_share_agreements
   ADD COLUMN IF NOT EXISTS counterparty_default_profit_handling text NOT NULL DEFAULT 'withdraw';
 
 -- Settlement decisions table: per-merchant, per-period monthly profit handling decisions
-CREATE TABLE IF NOT EXISTS public.settlement_decisions (
+CREATE TABLE public.settlement_decisions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   settlement_period_id uuid NOT NULL REFERENCES public.settlement_periods(id),
   agreement_id uuid NOT NULL REFERENCES public.profit_share_agreements(id),
@@ -44,18 +44,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_validate_settlement_decision ON public.settlement_decisions;
 CREATE TRIGGER trg_validate_settlement_decision
   BEFORE INSERT OR UPDATE ON public.settlement_decisions
   FOR EACH ROW EXECUTE FUNCTION public.validate_settlement_decision();
 
--- Updated_at trigger skipped during reconciliation because public.update_updated_at_column() is not guaranteed in TARGET.
+-- Updated_at trigger
+CREATE TRIGGER trg_settlement_decisions_updated_at
+  BEFORE UPDATE ON public.settlement_decisions
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- RLS
 ALTER TABLE public.settlement_decisions ENABLE ROW LEVEL SECURITY;
 
 -- Members of the agreement's relationship can view
-DROP POLICY IF EXISTS sd_select ON public.settlement_decisions;
 CREATE POLICY sd_select ON public.settlement_decisions
   FOR SELECT TO public
   USING (
@@ -67,7 +68,6 @@ CREATE POLICY sd_select ON public.settlement_decisions
   );
 
 -- Members can insert decisions
-DROP POLICY IF EXISTS sd_insert ON public.settlement_decisions;
 CREATE POLICY sd_insert ON public.settlement_decisions
   FOR INSERT TO public
   WITH CHECK (
@@ -79,7 +79,6 @@ CREATE POLICY sd_insert ON public.settlement_decisions
   );
 
 -- Members can update their own decisions (or system can update any)
-DROP POLICY IF EXISTS sd_update ON public.settlement_decisions;
 CREATE POLICY sd_update ON public.settlement_decisions
   FOR UPDATE TO public
   USING (
@@ -91,19 +90,7 @@ CREATE POLICY sd_update ON public.settlement_decisions
   );
 
 -- Enable realtime
-DO $$
-BEGIN
-  BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.settlement_decisions;
-  EXCEPTION
-    WHEN duplicate_object THEN NULL;
-    WHEN duplicate_table THEN NULL;
-  END;
-END $$;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.settlement_decisions;
 
 -- Reload schema cache
 NOTIFY pgrst, 'reload schema';
-
-
-
-
