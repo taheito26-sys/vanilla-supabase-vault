@@ -9,6 +9,9 @@ import {
 import { useT } from '@/lib/i18n';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/features/auth/auth-context';
+import { deleteCashAccountLedgerFromCloud } from '@/lib/cash-sync';
+import { useCashCustodyRequests } from '@/hooks/useCashCustodyRequests';
 
 // ── Icons (inline SVG helpers) ─────────────────────────────────────
 const IconHand = () => (
@@ -138,8 +141,29 @@ function AddAccountModal({ existingAccount, onSave, onClose, isMobile = false }:
     onSave(account);
   };
 
+  const selectStyle: React.CSSProperties = {
+    width: '100%',
+    minHeight: 42,
+    padding: '8px 10px',
+    fontSize: 12,
+    borderRadius: 6,
+    border: '1px solid var(--line)',
+    /* Hardcoded: CSS vars don't resolve in native OS dropdown popup */
+    background: '#1a1d38',
+    color: '#e8eaff',
+    cursor: 'pointer',
+    outline: 'none',
+    colorScheme: 'dark',
+  };
+
+  const optionStyle: React.CSSProperties = {
+    /* Hardcoded: CSS vars don't resolve in native OS dropdown popup */
+    backgroundColor: '#1a1d38',
+    color: '#e8eaff',
+  };
+
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
+    <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
       <div
         style={{
@@ -171,21 +195,19 @@ function AddAccountModal({ existingAccount, onSave, onClose, isMobile = false }:
         <div className="g2tight" style={{ marginBottom: 10 }}>
           <div className="field2">
             <div className="lbl">{t('accountTypeLbl')}</div>
-            <select value={type} onChange={e => setType(e.target.value as CashAccountType)}
-              style={{ width: '100%', minHeight: 42, padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              <option value="hand">💵 {t('accTypeHand')}</option>
-              <option value="bank">🏦 {t('accTypeBank')}</option>
-              <option value="vault">🔒 {t('accTypeVault')}</option>
-              <option value="merchant_custody">🤝 {t('accTypeMerchant') || 'Merchant Custody'}</option>
+            <select value={type} onChange={e => setType(e.target.value as CashAccountType)} style={selectStyle}>
+              <option value="hand" style={optionStyle}>💵 {t('accTypeHand')}</option>
+              <option value="bank" style={optionStyle}>🏦 {t('accTypeBank')}</option>
+              <option value="vault" style={optionStyle}>🔒 {t('accTypeVault')}</option>
+              <option value="merchant_custody" style={optionStyle}>🤝 {t('accTypeMerchant') || 'Merchant Custody'}</option>
             </select>
           </div>
           <div className="field2">
             <div className="lbl">{t('accountCurrencyLbl')}</div>
-            <select value={currency} onChange={e => setCurrency(e.target.value as CashCurrency)}
-              style={{ width: '100%', minHeight: 42, padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              <option value="QAR">🇶🇦 QAR</option>
-              <option value="USDT">💲 USDT</option>
-              <option value="USD">🇺🇸 USD</option>
+            <select value={currency} onChange={e => setCurrency(e.target.value as CashCurrency)} style={selectStyle}>
+              <option value="QAR" style={optionStyle}>🇶🇦 QAR</option>
+              <option value="USDT" style={optionStyle}>💲 USDT</option>
+              <option value="USD" style={optionStyle}>🇺🇸 USD</option>
             </select>
           </div>
         </div>
@@ -205,18 +227,14 @@ function AddAccountModal({ existingAccount, onSave, onClose, isMobile = false }:
 
         {type === 'merchant_custody' && (
           <div className="field2" style={{ marginBottom: 10 }}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             <div className="lbl">{t('linkToMerchant' as any) || 'Link to Merchant'}</div>
-            <select value={relationshipId} onChange={e => {
-              const relId = e.target.value;
-              setRelationshipId(relId);
-              // Automagically set merchantId based on relationship
-              // (Note: this assumes relationships are available via props or global state)
-            }}
-              style={{ width: '100%', minHeight: 42, padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              <option value="">{t('selectRelationship' as any) || 'Select Relationship...'}</option>
-              {/* Opions will be passed via state/props in main component */}
+            <select value={relationshipId} onChange={e => setRelationshipId(e.target.value)} style={selectStyle}>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              <option value="" style={optionStyle}>{t('selectRelationship' as any) || 'Select Relationship...'}</option>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               {(window as any)._allRels?.map((r: any) => (
-                <option key={r.id} value={r.id}>{r.counterparty_name || r.id}</option>
+                <option key={r.id} value={r.id} style={optionStyle}>{r.counterparty_name || r.id}</option>
               ))}
             </select>
           </div>
@@ -259,8 +277,11 @@ function DepositWithdrawModal({ account, currentBalance, mode, onSave, onClose, 
   const MODE_LABELS: Record<string, string> = {
     deposit: t('depositTitle'),
     withdrawal: t('withdrawTitle'),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     funding: t('fundMerchant' as any) || 'Fund Merchant',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     proceeds: t('recordProceeds' as any) || 'Record Proceeds',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     settlement: t('settleBack' as any) || 'Settle Back'
   };
 
@@ -292,9 +313,11 @@ function DepositWithdrawModal({ account, currentBalance, mode, onSave, onClose, 
   }, [isMobile]);
 
   const handle = () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (isMobile && !confirmChecked) { setErr(t('confirmBeforeSubmit' as any)); return; }
     if (!(amtNum > 0)) { setErr(t('enterValidAmount')); return; }
     if (amtNum > currentBalance && (mode === 'withdrawal' || mode === 'settlement')) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setErr(`${t('insufficientBalMsg' as any)} ${fmtTotal(currentBalance)} ${account.currency}`);
       return;
     }
@@ -313,7 +336,7 @@ function DepositWithdrawModal({ account, currentBalance, mode, onSave, onClose, 
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
+    <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
       <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: isMobile ? 14 : 12, padding: isMobile ? '14px 12px calc(12px + env(safe-area-inset-bottom))' : '22px 24px', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,.5)', maxHeight: isMobile ? Math.max(320, (viewportHeight || window.innerHeight) - 16) : '88vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -344,6 +367,7 @@ function DepositWithdrawModal({ account, currentBalance, mode, onSave, onClose, 
         {isMobile && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 11, color: 'var(--muted)' }}>
             <input type="checkbox" checked={confirmChecked} onChange={e => setConfirmChecked(e.target.checked)} />
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {mode === 'deposit' ? t('confirmDeposit' as any) : t('confirmWithdrawal' as any)}
           </label>
         )}
@@ -399,12 +423,17 @@ function TransferModal({ accounts, balances, defaultFromId, onSave, onClose, isM
   }, [isMobile]);
 
   const handle = () => {
-    if (isMobile && !confirmChecked) { setErr(t('confirmBeforeTransfer') as any); return; }
-    if (!fromId || !toId) { setErr(t('selectBothAccounts') as any); return; }
-    if (fromId === toId) { setErr(t('cannotSameAccount') as any); return; }
-    if (!(amtNum > 0)) { setErr(t('enterValidAmount') as any); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (isMobile && !confirmChecked) { setErr(t('confirmBeforeTransfer' as any)); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!fromId || !toId) { setErr(t('selectBothAccounts' as any)); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (fromId === toId) { setErr(t('cannotSameAccount' as any)); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!(amtNum > 0)) { setErr(t('enterValidAmount' as any)); return; }
     if (amtNum > fromBal) {
-      setErr((t('insufficientFundsMsg') as any) + ` ${fmtTotal(fromBal)} ${fromAcc?.currency}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setErr((t('insufficientFundsMsg' as any)) + ` ${fmtTotal(fromBal)} ${fromAcc?.currency}`);
       return;
     }
     const ts = Date.now();
@@ -418,30 +447,48 @@ function TransferModal({ accounts, balances, defaultFromId, onSave, onClose, isM
       direction: 'in', amount: amtNum, currency: toAcc!.currency,
       note: note.trim() || `Transfer from ${fromAcc?.name}`,
     };
-  onSave([outEntry, inEntry]);
+    onSave([outEntry, inEntry]);
+  };
+
+  const selectStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 10px',
+    fontSize: 12,
+    borderRadius: 6,
+    border: '1px solid var(--line)',
+    background: 'var(--panel)',
+    color: 'var(--text)',
+    cursor: 'pointer',
+    outline: 'none'
+  };
+
+  const optionStyle: React.CSSProperties = {
+    background: 'var(--panel)',
+    color: 'var(--text)'
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
+    <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
       <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: isMobile ? 14 : 12, padding: isMobile ? '14px 12px calc(12px + env(safe-area-inset-bottom))' : '22px 24px', width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,.5)', maxHeight: isMobile ? Math.max(320, (viewportHeight || window.innerHeight) - 16) : '88vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>{t('quickTransfer' as any)}</div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>✕</button>
         </div>
         <div className="g2tight" style={{ marginBottom: 10, alignItems: 'end', ...(isMobile ? { gridTemplateColumns: '1fr' } : {}) }}>
           <div className="field2">
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             <div className="lbl">{t('transferFromLbl' as any)}</div>
-            <select value={fromId} onChange={e => setFromId(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              {active.map(a => <option key={a.id} value={a.id}>{a.name} ({fmtTotal(balances.get(a.id) || 0)} {a.currency})</option>)}
+            <select value={fromId} onChange={e => setFromId(e.target.value)} style={selectStyle}>
+              {active.map(a => <option key={a.id} value={a.id} style={optionStyle}>{a.name} ({fmtTotal(balances.get(a.id) || 0)} {a.currency})</option>)}
             </select>
           </div>
           <div className="field2">
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             <div className="lbl">{t('transferToLbl' as any)}</div>
-            <select value={toId} onChange={e => setToId(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              {active.filter(a => a.id !== fromId).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            <select value={toId} onChange={e => setToId(e.target.value)} style={selectStyle}>
+              {active.filter(a => a.id !== fromId).map(a => <option key={a.id} value={a.id} style={optionStyle}>{a.name}</option>)}
             </select>
           </div>
         </div>
@@ -451,22 +498,26 @@ function TransferModal({ accounts, balances, defaultFromId, onSave, onClose, isM
         </div>
         {amtNum > 0 && fromAcc && (
           <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10 }}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {fromAcc.name} {(t('balanceAfterLbl' as any)).toLowerCase()}: <strong style={{ color: 'var(--warn)' }}>{fmtTotal(fromBal - amtNum)} {fromAcc.currency}</strong>
           </div>
         )}
         <div className="field2" style={{ marginBottom: 14 }}>
           <div className="lbl">{t('noteOptional')}</div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div className="inputBox"><input value={note} onChange={e => setNote(e.target.value)} placeholder={t('reasonTransferPh' as any)} /></div>
         </div>
         {isMobile && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 11, color: 'var(--muted)' }}>
             <input type="checkbox" checked={confirmChecked} onChange={e => setConfirmChecked(e.target.checked)} />
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {t('confirmTransferReview' as any)}
           </label>
         )}
         {err && <div style={{ color: 'var(--bad)', fontSize: 11, marginBottom: 10 }}>⚠ {err}</div>}
         <div className="formActions" style={{ position: isMobile ? 'sticky' : 'static', bottom: isMobile ? 0 : undefined, background: isMobile ? 'linear-gradient(to top, var(--panel2) 70%, transparent)' : undefined, paddingTop: isMobile ? 8 : 0 }}>
           <button className="btn secondary" onClick={onClose}>{t('cancel')}</button>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <button className="btn" style={{ minHeight: isMobile ? 42 : undefined }} onClick={handle}>{t('transferFundsBtn' as any)}</button>
         </div>
       </div>
@@ -513,20 +564,24 @@ function ReconcileEntryModal({ account, currentBalance, onSave, onClose, isMobil
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }} onClick={onClose}>
+    <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }} onClick={onClose}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(3px)' }} />
       <div style={{ position: 'relative', background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: 12, padding: 24, width: '100%', maxWidth: 360 }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>🔄 {t('reconcileBtn')} — {account.name}</div>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
         <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 16 }}>{t('reconcileDesc' as any) || 'Enter the actual physical balance to create an adjustment entry.'}</div>
-        
         <div className="field2" style={{ marginBottom: 10 }}>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div className="lbl">{t('physicalBalanceLbl' as any) || 'Physical Balance'}</div>
           <div className="inputBox"><input inputMode="decimal" value={actualBal} onChange={e => setActualBal(e.target.value)} placeholder="0.00" autoFocus /></div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>{t('systemBalance' as any) || 'System'}: {fmtTotal(currentBalance)} {account.currency}</div>
         </div>
 
         <div className="field2" style={{ marginBottom: 16 }}>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div className="lbl">{t('adjustmentReason' as any) || 'Reason'}</div>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <div className="inputBox"><input value={reason} onChange={e => setReason(e.target.value)} placeholder={t('adjustmentReasonPh' as any) || 'e.g. Rounding, unknown loss...'} /></div>
         </div>
 
@@ -534,7 +589,108 @@ function ReconcileEntryModal({ account, currentBalance, onSave, onClose, isMobil
         
         <div className="formActions">
           <button className="btn secondary" onClick={onClose}>{t('cancel')}</button>
-          <button className="btn" onClick={handle}>{t('confirmReconcile') || 'Confirm Reconciliation'}</button>
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          <button className="btn" onClick={handle}>{t('confirmReconcile' as any) || 'Confirm Reconciliation'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MerchantCustodyModal ──────────────────────────────────────────
+interface MerchantCustodyModalProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  relationships: any[];
+  myMerchantId: string;
+  onSubmit: (input: {
+    custodianMerchantId: string;
+    custodianUserId: string;
+    requesterMerchantId: string;
+    amount: number;
+    currency: string;
+    note?: string;
+    relationshipId?: string;
+  }) => void;
+  onClose: () => void;
+  isMobile?: boolean;
+}
+function MerchantCustodyModal({ relationships, myMerchantId, onSubmit, onClose, isMobile = false }: MerchantCustodyModalProps) {
+  const [relId, setRelId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState<CashCurrency>('QAR');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const selectedRel = relationships.find((r: any) => r.id === relId);
+
+  const handle = () => {
+    if (!relId) { setErr('Select a merchant relationship.'); return; }
+    if (!(num(amount, 0) > 0)) { setErr('Enter a valid amount.'); return; }
+    if (!selectedRel) { setErr('Invalid relationship.'); return; }
+    const custodianMerchantId: string = selectedRel.counterparty_name || selectedRel.merchant_b_id || '';
+    const custodianUserId: string = selectedRel.merchant_b_user_id || selectedRel.user_b_id || '';
+    onSubmit({
+      custodianMerchantId,
+      custodianUserId,
+      requesterMerchantId: myMerchantId,
+      amount: num(amount, 0),
+      currency,
+      note: note.trim() || undefined,
+      relationshipId: relId,
+    });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={onClose}>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
+      <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: isMobile ? 14 : 12, padding: isMobile ? '14px 12px calc(12px + env(safe-area-inset-bottom))' : '22px 24px', width: '100%', maxWidth: 440, boxShadow: '0 20px 60px rgba(0,0,0,.5)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>🤝 Merchant Cash Custody</div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.5 }}>
+          Request a merchant to hold cash on your behalf. They will receive a notification to accept or counter-propose.
+        </div>
+
+        <div className="field2" style={{ marginBottom: 10 }}>
+          <div className="lbl">Select Merchant (Custodian)</div>
+          <select value={relId} onChange={e => setRelId(e.target.value)}
+            style={{ width: '100%', minHeight: 42, padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: '#1a1d38', color: '#e8eaff', cursor: 'pointer', outline: 'none', colorScheme: 'dark' }}>
+            <option value="">Select relationship...</option>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            {relationships.map((r: any) => (
+              <option key={r.id} value={r.id}>{r.counterparty_name || r.merchant_b_id || r.id}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="g2tight" style={{ marginBottom: 10 }}>
+          <div className="field2">
+            <div className="lbl">Amount</div>
+            <div className="inputBox"><input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" autoFocus /></div>
+          </div>
+          <div className="field2">
+            <div className="lbl">Currency</div>
+            <select value={currency} onChange={e => setCurrency(e.target.value as CashCurrency)}
+              style={{ width: '100%', minHeight: 42, padding: '8px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: '#1a1d38', color: '#e8eaff', cursor: 'pointer', outline: 'none', colorScheme: 'dark' }}>
+              <option value="QAR">QAR</option>
+              <option value="USDT">USDT</option>
+              <option value="USD">USD</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="field2" style={{ marginBottom: 16 }}>
+          <div className="lbl">Note (optional)</div>
+          <div className="inputBox"><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Daily float for operations..." /></div>
+        </div>
+
+        {err && <div style={{ color: 'var(--bad)', fontSize: 11, marginBottom: 10 }}>⚠ {err}</div>}
+        <div className="formActions">
+          <button className="btn secondary" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={handle}>Send Custody Request</button>
         </div>
       </div>
     </div>
@@ -550,6 +706,7 @@ interface CashManagementProps {
 export function CashManagement({ state, applyState }: CashManagementProps) {
   const t = useT();
   const isMobile = useIsMobile();
+  const { user, merchantProfile } = useAuth();
   const accounts = state.cashAccounts || [];
   const ledger = state.cashLedger || [];
 
@@ -590,19 +747,32 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
   const [ledgerFilter, setLedgerFilter] = useState<{ accountId: string; type: string }>({ accountId: '', type: '' });
   const [reconcileAccountData, setReconcileAccountData] = useState<CashAccount | null>(null);
   const [clearLedgerPromptId, setClearLedgerPromptId] = useState<string | null>(null);
+  const [showMerchantCustody, setShowMerchantCustody] = useState(false);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [relationships, setRelationships] = useState<any[]>([]);
+
+  const {
+    pendingIncoming,
+    pendingOutgoing,
+    createRequest,
+    respondRequest,
+    cancelRequest,
+  } = useCashCustodyRequests();
 
   useEffect(() => {
     supabase.from('merchant_relationships').select('*').then(({ data }) => {
       if (data) {
         // Enriched list for select box
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const myMerchantId = (state as any).merchantId; // fallback
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const enriched = data.map((r: any) => ({
           ...r,
           counterparty_name: r.merchant_a_id === myMerchantId ? r.merchant_b_id : r.merchant_a_id, // simplified
         }));
         setRelationships(enriched);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (window as any)._allRels = enriched;
       }
     });
@@ -660,7 +830,20 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
   const addLedgerEntry = (entry: CashLedgerEntry) => {
     const newLedger = [...ledger, entry];
     const newCashQAR = deriveCashQAR(accounts, newLedger);
-    applyState({ ...state, cashLedger: newLedger, cashQAR: newCashQAR });
+    // BUG FIX (Bug 3): keep cashHistory in sync for dashboard CashBoxManager
+    const acc = accounts.find(a => a.id === entry.accountId);
+    const legacyEntry = {
+      id: entry.id,
+      ts: entry.ts,
+      type: (entry.direction === 'in' ? 'deposit' : 'withdraw') as 'deposit' | 'withdraw' | 'batch_purchase' | 'sale_deposit',
+      amount: entry.amount,
+      balanceAfter: newCashQAR,
+      owner: acc?.name ?? '',
+      bankAccount: acc?.bankName ?? '',
+      note: entry.note ?? '',
+    };
+    const newCashHistory = [...(state.cashHistory || []), legacyEntry];
+    applyState({ ...state, cashLedger: newLedger, cashQAR: newCashQAR, cashHistory: newCashHistory });
     setShowDeposit(null);
   };
 
@@ -681,6 +864,9 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
     const newLedger = ledger.filter(e => e.accountId !== id && e.contraAccountId !== id);
     const newCashQAR = deriveCashQAR(accounts, newLedger);
     applyState({ ...state, cashLedger: newLedger, cashQAR: newCashQAR });
+    // BUG FIX: also delete from cloud so cleared entries don't return on reload
+    deleteCashAccountLedgerFromCloud(id)
+      .catch(err => console.error('[CashManagement] deleteCashAccountLedgerFromCloud failed:', err));
   };
 
   // ── Ledger filtered rows with running balance ─────────────────
@@ -808,6 +994,17 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
           onClick={() => setShowAddAccount(true)}>
           <IconPlus /> {t('addAccountBtn')}
         </button>
+        <button
+          className="btn secondary"
+          style={{ padding: isMobile ? '10px 14px' : '7px 14px', minHeight: isMobile ? 42 : undefined, fontSize: isMobile ? 12 : 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, gridColumn: isMobile ? 'span 1' : undefined, position: 'relative' }}
+          onClick={() => setShowMerchantCustody(true)}>
+          🤝 Merchant Cash
+          {pendingIncoming.length > 0 && (
+            <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--bad)', color: '#fff', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>
+              {pendingIncoming.length}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* ── Warnings ── */}
@@ -912,6 +1109,7 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
                             </button>
                             <button className="rowBtn" style={{ fontSize: 10, minHeight: isMobile ? 38 : undefined, display: 'flex', gap: 5, alignItems: 'center', justifyContent: 'center' }}
                               onClick={() => setShowDeposit({ account: acc, mode: 'proceeds' })}>
+                              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                               📥 {t('recordProceeds' as any) || 'Proceeds'}
                             </button>
                             <button className="rowBtn" style={{ fontSize: 10, minHeight: isMobile ? 38 : undefined, display: 'flex', gap: 5, alignItems: 'center', justifyContent: 'center' }}
@@ -925,6 +1123,7 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
                               onClick={() => setShowDeposit({ account: acc, mode: 'deposit' })}>
                               <IconPlus /> {t('depositTitle')}
                             </button>
+                            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             <button className="rowBtn" style={{ fontSize: 10, minHeight: isMobile ? 38 : undefined, display: 'flex', gap: 5, alignItems: 'center', justifyContent: 'center' }}
                               onClick={() => setShowDeposit({ account: acc, mode: 'withdrawal' })}>
                               <IconMinus /> {t('withdrawTitle')}
@@ -962,21 +1161,94 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
         </div>
       )}
 
+      {/* ── PENDING CUSTODY REQUESTS (accounts tab inline) ── */}
+      {innerTab === 'accounts' && (pendingIncoming.length > 0 || pendingOutgoing.length > 0) && (
+        <div className="panel" style={{ marginTop: 4 }}>
+          <div className="panel-head"><h2>🤝 Pending Custody Requests</h2></div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {pendingIncoming.map(req => (
+              <div key={req.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid color-mix(in srgb, var(--brand) 25%, transparent)', borderRadius: 8, background: 'color-mix(in srgb, var(--brand) 5%, transparent)' }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700 }}>Incoming: {req.requesterMerchantId}</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    {fmtTotal(req.amount)} {req.currency}{req.note ? ` — ${req.note}` : ''}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn" style={{ fontSize: 10, padding: '5px 10px', background: 'var(--good)', color: '#000' }}
+                    onClick={() => {
+                      respondRequest.mutate({ id: req.id, action: 'accept' });
+                      // Add local transfer_in entry to a merchant_custody account for the requester's funds
+                      const existingCustodyAcc = accounts.find(a => a.type === 'merchant_custody' && a.merchantId === req.requesterMerchantId);
+                      const custodyAccId = existingCustodyAcc?.id ?? uid();
+                      const newAccounts = existingCustodyAcc ? accounts : [...accounts, {
+                        id: custodyAccId,
+                        name: `Custody — ${req.requesterMerchantId}`,
+                        type: 'merchant_custody' as CashAccountType,
+                        currency: req.currency as CashCurrency,
+                        status: 'active' as const,
+                        merchantId: req.requesterMerchantId,
+                        relationshipId: req.relationshipId,
+                        isMerchantAccount: true,
+                        purpose: 'custody' as const,
+                        createdAt: Date.now(),
+                      }];
+                      const inEntry: CashLedgerEntry = {
+                        id: uid(), ts: Date.now(),
+                        type: 'transfer_in',
+                        accountId: custodyAccId,
+                        direction: 'in',
+                        amount: req.amount,
+                        currency: req.currency as CashCurrency,
+                        note: `Custody accepted from ${req.requesterMerchantId}`,
+                        merchantId: req.requesterMerchantId,
+                        relationshipId: req.relationshipId,
+                      };
+                      const newLedger = [...ledger, inEntry];
+                      applyState({ ...state, cashAccounts: newAccounts, cashLedger: newLedger, cashQAR: deriveCashQAR(newAccounts, newLedger) });
+                    }}>
+                    ✓ Accept
+                  </button>
+                  <button className="rowBtn" style={{ fontSize: 10 }}
+                    onClick={() => respondRequest.mutate({ id: req.id, action: 'reject' })}>
+                    ✕ Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+            {pendingOutgoing.map(req => (
+              <div key={req.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid color-mix(in srgb, var(--muted) 25%, transparent)', borderRadius: 8 }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700 }}>Outgoing to: {req.custodianMerchantId}</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    {fmtTotal(req.amount)} {req.currency}{req.note ? ` — ${req.note}` : ''} · <span style={{ color: 'var(--warn)' }}>pending</span>
+                  </div>
+                </div>
+                <button className="rowBtn" style={{ fontSize: 10, color: 'var(--bad)' }}
+                  onClick={() => cancelRequest.mutate(req.id)}>
+                  Cancel
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── LEDGER TAB ── */}
       {innerTab === 'ledger' && (
         <div>
           {/* Filters */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
             <select value={ledgerFilter.accountId} onChange={e => setLedgerFilter(f => ({ ...f, accountId: e.target.value }))}
-              style={{ padding: '6px 10px', fontSize: 11, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              <option value="">{t('allAccountsOpt')}</option>
-              {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              style={{ padding: '6px 10px', fontSize: 11, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
+              <option value="" style={{ background: 'var(--panel)', color: 'var(--text)' }}>{t('allAccountsOpt')}</option>
+              {accounts.map(a => <option key={a.id} value={a.id} style={{ background: 'var(--panel)', color: 'var(--text)' }}>{a.name}</option>)}
             </select>
             <select value={ledgerFilter.type} onChange={e => setLedgerFilter(f => ({ ...f, type: e.target.value }))}
-              style={{ padding: '6px 10px', fontSize: 11, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--input-bg)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
-              <option value="">{t('allTypesOpt')}</option>
+              style={{ padding: '6px 10px', fontSize: 11, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--text)', cursor: 'pointer', outline: 'none' }}>
+              <option value="" style={{ background: 'var(--panel)', color: 'var(--text)' }}>{t('allTypesOpt')}</option>
               {(Object.keys(LEDGER_TYPE_LABELS) as LedgerEntryType[]).map(lType => (
-                <option key={lType} value={lType}>{LEDGER_TYPE_LABELS[lType]}</option>
+                <option key={lType} value={lType} style={{ background: 'var(--panel)', color: 'var(--text)' }}>{LEDGER_TYPE_LABELS[lType]}</option>
               ))}
             </select>
             {(ledgerFilter.accountId || ledgerFilter.type) && (
@@ -1163,7 +1435,7 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
 
       {/* Opening balance prompt for new accounts */}
       {pendingAccount && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setPendingAccount(null)}>
+        <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setPendingAccount(null)}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
           <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: 12, padding: '22px 24px', width: '100%', maxWidth: 380, boxShadow: '0 20px 60px rgba(0,0,0,.5)' }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 14 }}>{t('setOpeningBalance')}</div>
@@ -1197,7 +1469,7 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
         />
       )}
       {showTransfer && accounts.filter(a => a.status === 'active').length < 2 && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowTransfer(false)}>
+        <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowTransfer(false)}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)' }} />
           <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: 12, padding: '22px 24px', maxWidth: 360 }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{t('need2AccountsTitle')}</div>
@@ -1227,17 +1499,58 @@ export function CashManagement({ state, applyState }: CashManagementProps) {
       )}
 
       {clearLedgerPromptId && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={() => setClearLedgerPromptId(null)}>
+        <div className="tracker-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 'max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))' : 0 }} onClick={() => setClearLedgerPromptId(null)}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }} />
           <div style={{ position: 'relative', zIndex: 1, background: 'var(--panel2)', border: '1px solid var(--line)', borderRadius: isMobile ? 14 : 12, padding: isMobile ? '14px 12px calc(12px + env(safe-area-inset-bottom))' : '20px 22px', width: '100%', maxWidth: 420 }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8, color: 'var(--bad)' }}>⚠️ {t('clearLedger')}</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14 }}>{t('confirmClearLedger')}</div>
             <div className="formActions">
               <button className="btn secondary" onClick={() => setClearLedgerPromptId(null)}>{t('cancel')}</button>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               <button className="btn" style={{ minHeight: isMobile ? 42 : undefined, background: 'var(--bad)', color: '#fff' }} onClick={() => { clearLedgerEntries(clearLedgerPromptId); setClearLedgerPromptId(null); }}>{t('clearBtn' as any)}</button>
             </div>
           </div>
         </div>
+      )}
+
+      {showMerchantCustody && (
+        <MerchantCustodyModal
+          relationships={relationships}
+          myMerchantId={merchantProfile?.merchant_id ?? user?.id ?? ''}
+          isMobile={isMobile}
+          onClose={() => setShowMerchantCustody(false)}
+          onSubmit={(input) => {
+            createRequest.mutate(input);
+            // Add local merchant_custody account + merchant_funding_out ledger entry
+            const existingCustodyAcc = accounts.find(a => a.type === 'merchant_custody' && a.merchantId === input.custodianMerchantId);
+            const custodyAccId = existingCustodyAcc?.id ?? uid();
+            const newAccounts = existingCustodyAcc ? accounts : [...accounts, {
+              id: custodyAccId,
+              name: `Custody — ${input.custodianMerchantId}`,
+              type: 'merchant_custody' as CashAccountType,
+              currency: input.currency as CashCurrency,
+              status: 'active' as const,
+              merchantId: input.custodianMerchantId,
+              relationshipId: input.relationshipId,
+              isMerchantAccount: true,
+              purpose: 'custody' as const,
+              createdAt: Date.now(),
+            }];
+            const outEntry: CashLedgerEntry = {
+              id: uid(), ts: Date.now(),
+              type: 'merchant_funding_out',
+              accountId: custodyAccId,
+              direction: 'out',
+              amount: input.amount,
+              currency: input.currency as CashCurrency,
+              note: input.note ?? `Custody request to ${input.custodianMerchantId}`,
+              merchantId: input.custodianMerchantId,
+              relationshipId: input.relationshipId,
+            };
+            const newLedger = [...ledger, outEntry];
+            applyState({ ...state, cashAccounts: newAccounts, cashLedger: newLedger, cashQAR: deriveCashQAR(newAccounts, newLedger) });
+          }}
+        />
       )}
     </div>
   );

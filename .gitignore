@@ -32,3 +32,4 @@ ios/App/App/public
 ios/App/build
 ios/DerivedData
 .dyad/
+.env

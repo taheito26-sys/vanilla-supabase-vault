@@ -16,14 +16,15 @@ import { useQuery } from '@tanstack/react-query';
 import { CashBoxManager } from '@/features/dashboard/components/CashBoxManager';
 import { buildDealRowModel } from '@/features/orders/utils/dealRowModel';
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis,
-  Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Cell,
+  AreaChart, Area, XAxis, YAxis,
+  Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import '@/styles/tracker.css';
 
 interface DashboardPageProps {
   adminUserId?: string;
   adminMerchantId?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   adminTrackerState?: any;
   isAdminView?: boolean;
 }
@@ -42,8 +43,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
 
   const dM = kpiFor(state, derived, 'this_month');
   const dL = kpiFor(state, derived, 'last_month');
-  const d1 = kpiFor(state, derived, 'today');
-  const d7 = kpiFor(state, derived, '7d');
+  const d7  = kpiFor(state, derived, '7d');
   const d30 = kpiFor(state, derived, '30d');
   const dR = kpiFor(state, derived, settings.range);
   const stk = totalStock(derived);
@@ -62,7 +62,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const allMargins = allTrades.map(tr => {
     const c = derived.tradeCalc.get(tr.id);
     if (!c?.ok) return null;
-    // For linked trades, adjust margin to reflect only my share
     if (tr.linkedDealId || tr.linkedRelId) {
       const myPct = getTradeMyPct(tr);
       const myNet = c.netQAR * myPct / 100;
@@ -73,7 +72,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   }).filter((x): x is number => x !== null);
   const avgM = allMargins.length ? allMargins.reduce((s, v) => s + v, 0) / allMargins.length : 0;
 
-  // Avg cycle time: hours from batch purchase to FIFO sell
   const cycleHours = useMemo(() => {
     const tradesSorted = [...allTrades].sort((a, b) => a.ts - b.ts);
     const deltas: number[] = [];
@@ -101,7 +99,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const userId = adminUserId || user?.id;
   const workspaceMerchantId = adminMerchantId || merchantProfile?.merchant_id;
 
-  // Merchant deals KPIs
   interface DealDetail {
     id: string;
     title: string;
@@ -118,8 +115,8 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
 
   const { data: merchantDealKpis } = useQuery({
     queryKey: ['dashboard-merchant-deals', userId, workspaceMerchantId],
-    staleTime: 15_000,       // re-fetch after 15 s so edits in Orders page show quickly
-    refetchInterval: 30_000, // poll every 30 s in background
+    staleTime: 15_000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!userId || !workspaceMerchantId) return null;
       const relsScopedRes = await supabase
@@ -135,14 +132,15 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             .select('id, amount, status, created_by, notes, deal_type, relationship_id, title, created_at')
             .in('relationship_id', relIds)
             .order('created_at', { ascending: false })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         : { data: [] as any[] };
       if (!deals || deals.length === 0) return null;
 
       const activeDeals = deals.filter(d => d.status !== 'cancelled' && d.status !== 'voided');
-      // Fetch merchant profiles for names
       const dealRelIds = [...new Set(activeDeals.map(d => d.relationship_id))];
       const { data: rels } = dealRelIds.length > 0
         ? await supabase.from('merchant_relationships').select('id, merchant_a_id, merchant_b_id').in('id', dealRelIds)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         : { data: [] as any[] };
 
       const allMerchantIds = new Set<string>();
@@ -150,6 +148,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
 
       const { data: profiles } = allMerchantIds.size > 0
         ? await supabase.from('merchant_profiles').select('merchant_id, display_name, user_id').in('merchant_id', [...allMerchantIds])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         : { data: [] as any[] };
 
       const profileMap = new Map<string, { name: string; userId: string }>();
@@ -235,7 +234,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     applyState({ ...state, cashQAR: newCash, cashOwner: owner, cashHistory: history ?? state.cashHistory ?? [] });
   }, [state, applyState]);
 
-  // Range-aware merchant KPIs
   const rangeMerchantKpis = useMemo(() => {
     if (!merchantDealKpis?.dealDetails) return null;
     const filtered = merchantDealKpis.dealDetails.filter(d => inRange(d.ts, settings.range));
@@ -251,32 +249,26 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     return { inCount, inNet, inMyShare, outCount, outNet, outMyShare };
   }, [merchantDealKpis, settings.range]);
 
-
-  // ── P2P Averages from real trade data ──
   const p2pAvgs = useMemo(() => {
     const sellTrades = allTrades.filter(t => t.usesStock && t.sellPriceQAR > 0);
     const avgSell = sellTrades.length ? sellTrades.reduce((s, t) => s + t.sellPriceQAR, 0) / sellTrades.length : null;
-    // Avg buy from batches
     const batches = state.batches.filter(b => b.buyPriceQAR > 0);
     const avgBuy = batches.length ? batches.reduce((s, b) => s + b.buyPriceQAR, 0) / batches.length : null;
     return { avgSell, avgBuy };
   }, [allTrades, state.batches]);
 
-  // Helper: get net P&L for a trade (FIFO or manual fallback) — applies "my cut" for linked trades
-  const tradeNet = (tr: typeof allTrades[0]) => {
+  const tradeNet = useCallback((tr: typeof allTrades[0]) => {
     const c = derived.tradeCalc.get(tr.id);
     let fullNet = 0;
     if (c?.ok) fullNet = c.netQAR;
     else if (tr.manualBuyPrice) fullNet = tr.amountUSDT * tr.sellPriceQAR - tr.amountUSDT * tr.manualBuyPrice - tr.feeQAR;
-    // For linked trades, show only my share
     if (tr.linkedDealId || tr.linkedRelId) {
       const myPct = getTradeMyPct(tr);
       return fullNet * myPct / 100;
     }
     return fullNet;
-  };
+  }, [derived.tradeCalc]);
 
-  // ── Chart 1: Profit & Revenue Trend (last 14 trades) ──
   const trendData = useMemo(() => {
     const sorted = [...allTrades].sort((a, b) => a.ts - b.ts).slice(-14);
     return sorted.map((tr, i) => {
@@ -288,46 +280,9 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         profit: Math.round(tradeNet(tr)),
       };
     });
-  }, [allTrades, derived]);
+  }, [allTrades, tradeNet]);
 
-  // ── Chart 2: Net Profit Per Trade (all time, bar chart) ──
-  const profitPerTradeData = useMemo(() => {
-    const sorted = [...allTrades].sort((a, b) => a.ts - b.ts);
-    return sorted.map((tr, i) => {
-      const net = tradeNet(tr);
-      return {
-        idx: i + 1,
-        profit: Math.round(net),
-        positive: net >= 0,
-      };
-    });
-  }, [allTrades, derived]);
-
-  // ── Chart 3: Daily Volume & Profit (aggregated by day) ──
-  const dailyData = useMemo(() => {
-    const dayMap = new Map<number, { vol: number; profit: number; count: number }>();
-    for (const tr of allTrades) {
-      const dayTs = startOfDay(tr.ts);
-      const rev = tr.amountUSDT * tr.sellPriceQAR;
-      const net = tradeNet(tr);
-      const existing = dayMap.get(dayTs) || { vol: 0, profit: 0, count: 0 };
-      existing.vol += rev;
-      existing.profit += net;
-      existing.count += 1;
-      dayMap.set(dayTs, existing);
-    }
-    return Array.from(dayMap.entries())
-      .sort(([a], [b]) => a - b)
-      .slice(-14)
-      .map(([ts, d]) => ({
-        date: new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        volume: Math.round(d.vol),
-        profit: Math.round(d.profit),
-        trades: d.count,
-      }));
-  }, [allTrades, derived]);
-
-  // ── Recharts custom tooltip ──
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ChartTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null;
     return (
@@ -336,6 +291,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         borderRadius: 6, padding: '6px 10px', fontSize: 10,
       }}>
         <div style={{ fontWeight: 700, marginBottom: 3 }}>{label}</div>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
         {payload.map((p: any, i: number) => (
           <div key={i} style={{ color: p.color, display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <span>{p.name}</span>
@@ -355,47 +311,16 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     };
   };
 
-  const monthKpis = useMemo(() => {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
-
-    let myOwnOrdersNet = 0;
-    let myOwnOrdersCount = 0;
-    for (const tr of allTrades) {
-      if (tr.ts < monthStart || tr.ts >= nextMonthStart) continue;
-      if (tr.linkedDealId || tr.linkedRelId) continue;
-      myOwnOrdersNet += tradeNet(tr);
-      myOwnOrdersCount += 1;
-    }
-
-    const inMonthDeals = (merchantDealKpis?.dealDetails || []).filter(d => d.direction === 'incoming' && d.ts >= monthStart && d.ts < nextMonthStart);
-    const outMonthDeals = (merchantDealKpis?.dealDetails || []).filter(d => d.direction === 'outgoing' && d.ts >= monthStart && d.ts < nextMonthStart);
-    const incomingNet = inMonthDeals.reduce((s, d) => s + d.myShare, 0);
-    const outgoingNet = outMonthDeals.reduce((s, d) => s + d.myShare, 0);
-    const totalNet = myOwnOrdersNet + incomingNet + outgoingNet;
-
-    return {
-      myOwnOrdersNet,
-      myOwnOrdersCount,
-      incomingNet,
-      incomingCount: inMonthDeals.length,
-      outgoingNet,
-      outgoingCount: outMonthDeals.length,
-      totalNet,
-    };
-  }, [allTrades, merchantDealKpis, tradeNet]);
-
-  // Date/Month labels
   const now = new Date();
   const monthKeys = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const curMo = t(monthKeys[now.getMonth()] as any);
   const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const prevMo = t(monthKeys[prevDate.getMonth()] as any);
 
   return (
     <div className="tracker-root" dir={t.isRTL ? 'rtl' : 'ltr'} style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }}>
-      {/* KPI Bands */}
       <div className="kpi-band-grid">
         <div className="kpi-band">
           <div className="kpi-band-title">{t('tradingVolume')}</div>
@@ -418,17 +343,16 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             <div>
               <div className="kpi-period">{curMo}</div>
               <div className={`kpi-cell-val ${dM.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dM.net, settings.currency, wacop)}</div>
-              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dM.fee, settings.currency, wacop)}</div>
+              {dM.fee > 0 && <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dM.fee, settings.currency, wacop)}</div>}
               <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
             </div>
             <div>
               <div className="kpi-period">{prevMo}</div>
               <div className={`kpi-cell-val ${dL.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dL.net, settings.currency, wacop)}</div>
-              <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dL.fee, settings.currency, wacop)}</div>
+              {dL.fee > 0 && <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dL.fee, settings.currency, wacop)}</div>}
               <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
             </div>
           </div>
-          {/* Incoming deals net profit */}
           {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
             <div style={{ marginTop: 6, padding: '5px 8px', borderRadius: 6, background: 'color-mix(in srgb, var(--good) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--good) 15%, transparent)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -444,7 +368,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
               </div>
             </div>
           )}
-          {/* Combined total */}
           {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
             <>
               <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderTop: '1px solid var(--line)' }}>
@@ -459,7 +382,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         </div>
       </div>
 
-      {/* KPI Cards Row 1 */}
       <div className="kpis">
         <div className="kpi-card">
           <div className="kpi-head">
@@ -502,9 +424,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         </div>
       </div>
 
-      {/* Cash · Buying Power · Net Position · Stock Cost Est */}
       <div className="kpis" style={{ marginTop: 0 }}>
-        {/* ── Upgraded Cash KPI ── */}
         {(() => {
           const cashAccounts = state.cashAccounts || [];
           const cashLedger = state.cashLedger || [];
@@ -573,9 +493,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         </div>
       </div>
 
-      {/* New KPIs: ROI · Cycle Time · Velocity · Outgoing Net · Incoming Net */}
       <div className="kpis" style={{ marginTop: 0 }}>
-        {/* Daily ROI (7D / 30D toggle) */}
         {(() => {
           const roiData = roiPeriod === '7d' ? d7 : d30;
           const roiVal = stCost > 0 ? (roiData.net / stCost) * 100 : 0;
@@ -629,7 +547,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           );
         })()}
 
-        {/* Avg Cycle Time */}
         {(() => {
           const isExpanded = expandedNewKpi === 'cycle';
           return (
@@ -660,8 +577,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           );
         })()}
 
-
-        {/* Outgoing Deals Net Profit */}
         {rangeMerchantKpis && (
           <div className="kpi-card">
             <div className="kpi-head">
@@ -677,7 +592,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           </div>
         )}
 
-        {/* Incoming Deals Net Profit */}
         {rangeMerchantKpis && (
           <div className="kpi-card">
             <div className="kpi-head">
@@ -694,7 +608,6 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         )}
       </div>
 
-      {/* Bottom panels */}
       <div className="dash-bottom">
         <div className="panel">
           <div className="panel-head"><h2>{t('profitRevenueTrend')}</h2><span className="pill">{t('last14Trades')}</span></div>
@@ -732,60 +645,10 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           <div className="panel-body">
             <div className="prev-row"><span className="muted">{t('volume')}</span><strong className="mono t1v">{fmtQWithUnit(dR.rev, settings.currency, wacop)}</strong></div>
             <div className="prev-row"><span className="muted">{t('cost')}</span><strong className="mono">{fmtQWithUnit(dR.rev - dR.net - dR.fee, settings.currency, wacop)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtQWithUnit(dR.fee, settings.currency, wacop)}</strong></div>
+            {dR.fee > 0 && <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtQWithUnit(dR.fee, settings.currency, wacop)}</strong></div>}
             <div className="prev-row"><span className="muted">{t('netProfitLabel')}</span><strong className={`mono ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net, settings.currency, wacop)}</strong></div>
             <div className="prev-row"><span className="muted">{t('avgMargin')}</span><strong className="mono" style={{ color: 'var(--t3)' }}>{fmtPct(avgM)}</strong></div>
             <div className="prev-row"><span className="muted">{t('trades')}</span><strong className="mono">{dR.count}</strong></div>
-          </div>
-        </div>
-      </div>
-
-      {/* Chart panels */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <div className="panel">
-          <div className="panel-head"><h2>{t('netProfitPerTrade')}</h2><span className="pill muted">{t('allTime')}</span></div>
-          <div className="panel-body" style={{ height: 170, position: 'relative' }}>
-            {profitPerTradeData.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                <span className="muted" style={{ fontSize: 11 }}>{t('noTradesYet')}</span>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={profitPerTradeData} margin={{ top: 8, right: 4, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" strokeOpacity={0.3} vertical={false} />
-                  <XAxis dataKey="idx" tick={{ fontSize: 8, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <ReferenceLine y={0} stroke="var(--muted)" strokeOpacity={0.4} strokeDasharray="3 3" />
-                  <Bar dataKey="profit" name={t('netProfitLabel') || 'Profit'} radius={[2, 2, 0, 0]} maxBarSize={12}>
-                    {profitPerTradeData.map((entry, i) => (
-                      <Cell key={i} fill={entry.positive ? '#22c55e' : '#ef4444'} fillOpacity={0.8} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-        <div className="panel">
-          <div className="panel-head"><h2>{t('dailyVolumeProfit')}</h2><span className="pill muted">{t('byDay')}</span></div>
-          <div className="panel-body" style={{ height: 170, position: 'relative' }}>
-            {dailyData.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                <span className="muted" style={{ fontSize: 11 }}>{t('noTradesYet')}</span>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dailyData} margin={{ top: 8, right: 4, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" strokeOpacity={0.3} vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 8, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="volume" name={t('volume') || 'Volume'} fill="#6366f1" fillOpacity={0.5} radius={[2, 2, 0, 0]} maxBarSize={16} />
-                  <Bar dataKey="profit" name={t('netProfitLabel') || 'Profit'} fill="#22c55e" fillOpacity={0.85} radius={[2, 2, 0, 0]} maxBarSize={16} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
           </div>
         </div>
       </div>
