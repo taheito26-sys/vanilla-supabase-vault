@@ -37,14 +37,14 @@ async function run() {
     for (const file of migrationFiles) {
       console.log(`\nExecuting ${file}...`);
       const filePath = path.join(process.cwd(), "Migrate", file);
-      
+
       if (!fs.existsSync(filePath)) {
         console.warn(`File ${filePath} not found, skipping.`);
         continue;
       }
-      
+
       const sql = fs.readFileSync(filePath, "utf8");
-      
+
       // Some large inserts might need to be run, we'll run them as a single query text
       await client.query(sql);
       console.log(`Successfully completed ${file}.`);
