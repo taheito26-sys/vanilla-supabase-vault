@@ -16,39 +16,79 @@ const migrationFiles = [
 async function run() {
   try {
     await client.connect();
-    console.log("Connected. Reading and combining all chunked files...");
+    console.log("Connected to Database via IPv4 Pooler.");
 
     let completeSqlBuffer = "";
 
+    // 1. Load and concatenate files
     for (const file of migrationFiles) {
       const filePath = path.join(process.cwd(), "Migrate", file);
       if (fs.existsSync(filePath)) {
-        console.log(`Reading ${file}...`);
+        console.log(`Loading ${file} into memory...`);
         const fileStr = fs.readFileSync(filePath, "utf8");
         completeSqlBuffer += fileStr;
       }
     }
 
-    console.log("Files combined. Cleaning up psql meta-commands...");
-    
-    // Quick parse to strip lines starting with \ (specifically lines that just start with '\' after potential whitespace)
-    const cleanedSql = completeSqlBuffer
-      .split('\n')
-      .filter(line => !line.trim().startsWith('\\'))
-      .join('\n');
+    console.log("Files loaded. Parsing and batching statements...");
 
-    console.log(`Prepared single transaction (${(cleanedSql.length / 1024 / 1024).toFixed(2)} MB). Executing... This will take a few minutes.`);
-    
-    // Execute the massive insert
-    await client.query(cleanedSql);
-    
-    console.log("Massive combined data inserts successfully complete!");
+    // 2. Remove psql meta-commands and empty lines
+    const rawLines = completeSqlBuffer.split('\n');
+    let cleanedSql = '';
+    for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i].trim();
+        if (!line.startsWith('\\') && line.length > 0 && !line.startsWith('--')) {
+            cleanedSql += rawLines[i] + '\n';
+        }
+    }
+
+    // 3. Split the entire 250MB string into individual SQL statements
+    // pg_dump usually separates them with ;\n
+    const statements = cleanedSql.split(/;\s*?\n/);
+    console.log(`Successfully parsed ${statements.length} independent SQL statements.`);
+
+    // 4. Batch execution config
+    const BATCH_SIZE = 200; // Sending 200 inserts per batch avoids transaction pooler timeout
+    let currentBatch = [];
+    let executedCount = 0;
+    let errorCount = 0;
+
+    console.log("Initiating batched execution safely...");
+
+    for (let i = 0; i < statements.length; i++) {
+      let stmt = statements[i].trim();
+      if (!stmt) continue;
+      
+      currentBatch.push(stmt);
+
+      // Once the batch is full, or if it's the very last statement, execute it
+      if (currentBatch.length >= BATCH_SIZE || i === statements.length - 1) {
+        const batchQuery = currentBatch.join(';\n');
+        try {
+            await client.query(batchQuery);
+            executedCount += currentBatch.length;
+            process.stdout.write(`\rProgress: Executed ${executedCount} / ${statements.length} inserts...`);
+        } catch (err) {
+            // Because they are distinct rows, if one batch fails (e.g. duplicate key), log and continue
+            errorCount++;
+            fs.appendFileSync('migration-errors.log', `\n--- ERROR IN BATCH (starts at index ${i - currentBatch.length}) ---\n${err.message}\n`);
+        }
+        // reset batch
+        currentBatch = [];
+      }
+    }
+
+    console.log(`\n\nMigration Complete!`);
+    console.log(`✅ Total successful statements: ${executedCount}`);
+    if (errorCount > 0) {
+      console.log(`⚠️  Encountered failed batches: ${errorCount}. Check 'migration-errors.log' for details.`);
+    }
+
   } catch (e) {
-    console.error(`Migration Script Error:`, e);
+    console.error(`\nMigration Script Global Error:`, e);
   } finally {
     await client.end();
   }
 }
 
-// Increase Node string limit processing just in case? Node handles 1GB strings mostly fine.
 run();
