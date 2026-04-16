@@ -7,17 +7,20 @@ import { supabase } from '@/integrations/supabase/client';
 import { fmtU } from '@/lib/tracker-helpers';
 import { DEAL_TYPE_CONFIGS } from '@/lib/deal-engine';
 import { toast } from 'sonner';
-import { UnifiedChatInbox } from '@/features/merchants/components/UnifiedChatInbox';
+import ChatWorkspacePage from '@/features/chat/pages/ChatWorkspacePage';
 import { AgreementsGlobalTab } from '@/features/merchants/components/AgreementsGlobalTab';
+import MerchantClientsTab from '@/features/merchants/components/MerchantClientsTab';
+import MerchantCustomerOrdersTab from '@/features/merchants/components/MerchantCustomerOrdersTab';
 import { LiquidityTab } from '@/features/merchants/liquidity/LiquidityTab';
 import { useSettlementOverview } from '@/hooks/useSettlementOverview';
 import { useProfitShareAgreements } from '@/hooks/useProfitShareAgreements';
 import { isAgreementActive, getAgreementLabel } from '@/lib/deal-engine';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { getRooms } from '@/features/chat/api/chat';
 import '@/styles/tracker.css';
 import { focusElementBySelectors } from '@/lib/focus-target';
 
-type MerchantTab = 'relationships' | 'agreements' | 'settlements' | 'chat' | 'liquidity';
+type MerchantTab = 'relationships' | 'agreements' | 'settlements' | 'chat' | 'liquidity' | 'clients' | 'client-orders';
 
 interface AgreementRow {
   id: string;
@@ -36,19 +39,23 @@ interface AgreementRow {
 interface MerchantsPageProps {
   adminUserId?: string;
   adminMerchantId?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adminMerchantProfile?: any | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adminTrackerState?: any;
   isAdminView?: boolean;
 }
 
-export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminView }: MerchantsPageProps = {}) {
+export default function MerchantsPage({ adminUserId, adminMerchantId, adminMerchantProfile, adminTrackerState, isAdminView }: MerchantsPageProps = {}) {
   const { settings } = useTheme();
   const { userId: authUserId, merchantProfile: authMerchantProfile } = useAuth();
-  const effectiveUserId = adminUserId || authUserId;
-  const effectiveMerchantProfile = adminMerchantId
-    ? { ...authMerchantProfile, merchant_id: adminMerchantId } as typeof authMerchantProfile
+  const userId = isAdminView ? adminUserId : authUserId;
+  const merchantProfile = isAdminView
+    ? (adminMerchantProfile ?? (adminUserId && adminMerchantId ? {
+        user_id: adminUserId,
+        merchant_id: adminMerchantId,
+      } : null))
     : authMerchantProfile;
-  // Alias for rest of file
-  const userId = effectiveUserId;
-  const merchantProfile = effectiveMerchantProfile;
   const t = useT();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -56,7 +63,7 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
 
   const [tab, setTab] = useState<MerchantTab>(() => {
     const qTab = searchParams.get('tab');
-    if (qTab === 'chat' || qTab === 'settlements' || qTab === 'relationships' || qTab === 'agreements' || qTab === 'liquidity') return qTab as MerchantTab;
+    if (qTab === 'chat' || qTab === 'settlements' || qTab === 'relationships' || qTab === 'agreements' || qTab === 'liquidity' || qTab === 'clients' || qTab === 'client-orders') return qTab as MerchantTab;
     return 'relationships';
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,7 +85,10 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
   const { data: allAgreements = [] } = useProfitShareAgreements(undefined, adminMerchantId);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
 
-  useEffect(() => { loadData(); }, [userId, merchantProfile?.merchant_id]);
+  useEffect(() => {
+    if (isAdminView && (!userId || !merchantProfile?.merchant_id)) return;
+    loadData();
+  }, [isAdminView, userId, merchantProfile?.merchant_id]);
 
   useEffect(() => {
     const focusInviteId = searchParams.get('focusInviteId');
@@ -96,20 +106,19 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
   // Fetch unread message count (scoped to this merchant's relationships only)
   useEffect(() => {
     if (!userId) return;
-    const relationshipIds = relationships.map((r) => r.id).filter(Boolean);
-    if (!relationshipIds.length) {
-      setUnreadChatCount(0);
-      return;
-    }
-
-    supabase
-      .from('merchant_messages')
-      .select('id', { count: 'exact', head: true })
-      .in('relationship_id', relationshipIds)
-      .neq('sender_id', userId)
-      .is('read_at', null)
-      .then(({ count }) => setUnreadChatCount(count || 0));
-  }, [userId, relationships]);
+    let cancelled = false;
+    void getRooms()
+      .then((rooms) => {
+        if (cancelled) return;
+        setUnreadChatCount(rooms.reduce((sum, room) => sum + (room.unread_count ?? 0), 0));
+      })
+      .catch(() => {
+        if (!cancelled) setUnreadChatCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const handleOpenRelationship = useCallback((relationshipId: string) => {
     navigate(`/merchants/${relationshipId}`);
@@ -119,8 +128,8 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
     navigate(`/trading/orders?relationship=${relationshipId}`);
   }, [navigate]);
 
-  const handleOpenRelationshipChat = useCallback((relationshipId: string) => {
-    navigate(`/trading/merchants?tab=chat&relationship=${relationshipId}`);
+  const handleOpenRelationshipChat = useCallback((_relationshipId: string) => {
+    navigate('/chat');
   }, [navigate]);
 
   const loadData = async () => {
@@ -335,8 +344,29 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
 
   const overdueCount = settlementOverview?.overdueCount || 0;
   const activeAgreementCount = allAgreements.filter(a => isAgreementActive(a)).length;
+  // Fetch pending client connection count
+  const [pendingClientCount, setPendingClientCount] = useState(0);
+  const [pendingOrderCount, setPendingOrderCount] = useState(0);
+  useEffect(() => {
+    if (!merchantProfile?.merchant_id) return;
+    supabase
+      .from('customer_merchant_connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('merchant_id', merchantProfile.merchant_id)
+      .eq('status', 'pending')
+      .then(({ count }) => setPendingClientCount(count || 0));
+    supabase
+      .from('customer_orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('merchant_id', merchantProfile.merchant_id)
+      .eq('status', 'pending')
+      .then(({ count }) => setPendingOrderCount(count || 0));
+  }, [merchantProfile?.merchant_id]);
+
   const tabs: { key: MerchantTab; label: string; icon: string; badge?: number }[] = [
     { key: 'relationships', label: t('relationships') || 'Relationships', icon: '👥' },
+    { key: 'clients', label: 'Clients', icon: '👤', badge: pendingClientCount > 0 ? pendingClientCount : undefined },
+    { key: 'client-orders', label: 'Customer Orders', icon: '🛒', badge: pendingOrderCount > 0 ? pendingOrderCount : undefined },
     { key: 'liquidity', label: t('liquidityTab') || 'Liquidity', icon: '💧' },
     { key: 'agreements', label: t('profitShareAgreements'), icon: '🤝' },
     { key: 'settlements', label: t('settlementTracker'), icon: '💰', badge: overdueCount > 0 ? overdueCount : undefined },
@@ -723,22 +753,37 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
           )}
 
           {tab === 'liquidity' && (
-            <LiquidityTab
-              onOpenRelationship={handleOpenRelationship}
-              onOpenChat={handleOpenRelationshipChat}
-              onOpenDeal={handleOpenOrders}
+          <LiquidityTab
+            onOpenRelationship={handleOpenRelationship}
+            onOpenChat={handleOpenRelationshipChat}
+            onOpenDeal={handleOpenOrders}
+            adminUserId={userId}
+            adminMerchantId={merchantProfile?.merchant_id}
+            adminTrackerState={adminTrackerState}
+            isAdminView={isAdminView}
+          />
+          )}
+
+          {/* ═══ CUSTOMER ORDERS TAB ═══ */}
+          {tab === 'client-orders' && (
+            <MerchantCustomerOrdersTab
+              merchantId={merchantProfile?.merchant_id}
+              isAdminView={isAdminView}
             />
           )}
 
-
           {/* ═══ AGREEMENTS TAB ═══ */}
           {tab === 'agreements' && (
-            <AgreementsGlobalTab
-              relationships={relationships}
-              allAgreements={allAgreements}
-              activeAgreementCount={activeAgreementCount}
-              onOpenRelationship={handleOpenRelationship}
-            />
+          <AgreementsGlobalTab
+            relationships={relationships}
+            allAgreements={allAgreements}
+            activeAgreementCount={activeAgreementCount}
+            onOpenRelationship={handleOpenRelationship}
+            adminUserId={userId}
+            adminMerchantId={merchantProfile?.merchant_id}
+            adminTrackerState={adminTrackerState}
+            isAdminView={isAdminView}
+          />
           )}
 
           {/* ═══ SETTLEMENTS TAB ═══ */}
@@ -884,9 +929,20 @@ export default function MerchantsPage({ adminUserId, adminMerchantId, isAdminVie
             </>
           )}
 
-          {/* ═══ CHAT TAB ═══ */}
+          {/* ═══ CLIENTS TAB ═══ */}
+          {tab === 'clients' && merchantProfile?.merchant_id && (
+          <MerchantClientsTab
+            merchantId={merchantProfile.merchant_id}
+            userId={userId}
+            isAdminView={isAdminView}
+          />
+          )}
+
+          {/* ═══ CHAT TAB ═══ — Unified chat platform */}
           {tab === 'chat' && (
-            <UnifiedChatInbox relationships={relationships} />
+            <div className="h-[calc(100dvh-8rem)] -mx-4 -mb-4">
+              <ChatWorkspacePage />
+            </div>
           )}
 
         </>

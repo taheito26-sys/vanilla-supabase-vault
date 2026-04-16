@@ -2,18 +2,19 @@ import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTrackerState } from '@/lib/useTrackerState';
 import {
-  fmtQWithUnit, fmtU, fmtQ, fmtPct, fmtP,
+  fmtU, fmtPct,
   fmtTotal, fmtPrice,
   kpiFor, totalStock, stockCostQAR, getWACOP,
   rangeLabel, num, startOfDay, inRange,
   deriveCashQAR,
 } from '@/lib/tracker-helpers';
 import { useTheme } from '@/lib/theme-context';
-import { useT } from '@/lib/i18n';
+import { useT, getCurrencyLabel } from '@/lib/i18n';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/features/auth/auth-context';
 import { useQuery } from '@tanstack/react-query';
 import { CashBoxManager } from '@/features/dashboard/components/CashBoxManager';
+import { useP2PRates } from '@/features/dashboard/hooks/useP2PRates';
 import { buildDealRowModel } from '@/features/orders/utils/dealRowModel';
 import {
   AreaChart, Area, XAxis, YAxis,
@@ -33,12 +34,17 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const { settings } = useTheme();
   const t = useT();
   const navigate = useNavigate();
+  const isAdminWorkspace = Boolean(isAdminView);
+  const { user, merchantProfile } = useAuth();
+  const resolvedUserId = isAdminWorkspace ? adminUserId : user?.id;
+  const resolvedMerchantId = isAdminWorkspace ? adminMerchantId : merchantProfile?.merchant_id;
   const { state, derived, applyState } = useTrackerState({
     lowStockThreshold: settings.lowStockThreshold,
     priceAlertThreshold: settings.priceAlertThreshold,
     range: settings.range,
     currency: settings.currency,
-    preloadedState: adminTrackerState || undefined,
+    preloadedState: adminTrackerState,
+    disableCloudSync: isAdminWorkspace,
   });
 
   const dM = kpiFor(state, derived, 'this_month');
@@ -48,8 +54,56 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const dR = kpiFor(state, derived, settings.range);
   const stk = totalStock(derived);
   const stCost = stockCostQAR(derived);
-  const wacop = getWACOP(derived);
+  const averageStockPrice = getWACOP(derived);
   const rLabel = rangeLabel(settings.range);
+  const baseFiat = settings.baseFiatCurrency || 'QAR';
+  const { data: qatarP2PRate } = useP2PRates('qatar');
+  const { data: egyptP2PRate } = useP2PRates('egypt');
+
+  const dashboardQarPerUsdt = useMemo(() => {
+    const qatarBuyRate = num(qatarP2PRate?.buyRate, 0);
+    if (qatarBuyRate > 0) return qatarBuyRate;
+    const stockRate = num(averageStockPrice, 0);
+    return stockRate > 0 ? stockRate : null;
+  }, [averageStockPrice, qatarP2PRate?.buyRate]);
+
+  const egyptBuyRate = useMemo(() => {
+    const marketRate = num(egyptP2PRate?.buyRate, 0);
+    return marketRate > 0 ? marketRate : null;
+  }, [egyptP2PRate?.buyRate]);
+
+  const convertDashboardFiat = useCallback((qarAmount: number) => {
+    const amount = num(qarAmount, Number.NaN);
+    if (!Number.isFinite(amount)) return null;
+
+    if (settings.currency === 'USDT' && dashboardQarPerUsdt && dashboardQarPerUsdt > 0) {
+      return { amount: amount / dashboardQarPerUsdt, currency: 'USDT' as const };
+    }
+
+    if (settings.currency === 'EGP' && dashboardQarPerUsdt && dashboardQarPerUsdt > 0 && egyptBuyRate && egyptBuyRate > 0) {
+      return { amount: (amount / dashboardQarPerUsdt) * egyptBuyRate, currency: 'EGP' as const };
+    }
+
+    return { amount, currency: 'QAR' as const };
+  }, [dashboardQarPerUsdt, egyptBuyRate, settings.currency]);
+
+  const fmtDashboardAmount = useCallback((qarAmount: number) => {
+    const converted = convertDashboardFiat(qarAmount);
+    if (!converted) return '—';
+    if (converted.currency === 'USDT') return `${fmtPrice(converted.amount)} USDT`;
+    return `${fmtTotal(converted.amount)} ${converted.currency}`;
+  }, [convertDashboardFiat]);
+
+  const fmtDashboardPrice = useCallback((priceQarPerUsdt: number) => {
+    const price = num(priceQarPerUsdt, Number.NaN);
+    if (!Number.isFinite(price)) return '—';
+
+    if (settings.currency === 'EGP' && dashboardQarPerUsdt && dashboardQarPerUsdt > 0 && egyptBuyRate && egyptBuyRate > 0) {
+      return `${fmtPrice((price / dashboardQarPerUsdt) * egyptBuyRate)} EGP`;
+    }
+
+    return `${fmtPrice(price)} QAR`;
+  }, [dashboardQarPerUsdt, egyptBuyRate, settings.currency]);
 
   const allTrades = state.trades.filter(t => !t.voided);
   const getTradeMyPct = (tr: typeof allTrades[0]) => {
@@ -95,9 +149,8 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   const [showCashBox, setShowCashBox] = useState(false);
   const [expandedNewKpi, setExpandedNewKpi] = useState<string | null>(null);
   const [roiPeriod, setRoiPeriod] = useState<'7d' | '30d'>('7d');
-  const { user, merchantProfile } = useAuth();
-  const userId = adminUserId || user?.id;
-  const workspaceMerchantId = adminMerchantId || merchantProfile?.merchant_id;
+  const userId = resolvedUserId;
+  const workspaceMerchantId = resolvedMerchantId;
 
   interface DealDetail {
     id: string;
@@ -269,6 +322,41 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
     return fullNet;
   }, [derived.tradeCalc]);
 
+  // ── Segmented Net Profit KPI (Own / Incoming / Outgoing) ──────────────
+  const segmentedProfit = useMemo(() => {
+    const computeForRange = (range: string) => {
+      const ownTrades = allTrades.filter(tr => !tr.linkedDealId && !tr.linkedRelId && inRange(tr.ts, range));
+      let ownNet = 0, ownRev = 0, ownQty = 0, ownCount = 0;
+      for (const tr of ownTrades) {
+        ownNet += tradeNet(tr);
+        ownRev += tr.amountUSDT * tr.sellPriceQAR;
+        ownQty += tr.amountUSDT;
+        ownCount++;
+      }
+      let inMyShare = 0, inVol = 0, inCount = 0;
+      let outMyShare = 0, outVol = 0, outCount = 0;
+      if (merchantDealKpis?.dealDetails) {
+        const seen = new Set<string>();
+        for (const d of merchantDealKpis.dealDetails) {
+          if (!inRange(d.ts, range)) continue;
+          if (seen.has(d.id)) continue;
+          seen.add(d.id);
+          if (!Number.isFinite(d.myShare)) continue;
+          if (d.direction === 'incoming') { inMyShare += d.myShare; inVol += d.vol; inCount++; }
+          else if (d.direction === 'outgoing') { outMyShare += d.myShare; outVol += d.vol; outCount++; }
+        }
+      }
+      const totalNet = ownNet + inMyShare + outMyShare;
+      const totalRev = ownRev + inVol + outVol;
+      return { ownNet, ownRev, ownQty, ownCount, inMyShare, inVol, inCount, outMyShare, outVol, outCount, total: totalNet, totalRev };
+    };
+    return {
+      thisMonth: computeForRange('this_month'),
+      lastMonth: computeForRange('last_month'),
+      range: computeForRange(settings.range),
+    };
+  }, [allTrades, merchantDealKpis, settings.range, tradeNet]);
+
   const trendData = useMemo(() => {
     const sorted = [...allTrades].sort((a, b) => a.ts - b.ts).slice(-14);
     return sorted.map((tr, i) => {
@@ -295,7 +383,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         {payload.map((p: any, i: number) => (
           <div key={i} style={{ color: p.color, display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <span>{p.name}</span>
-            <span className="mono" style={{ fontWeight: 700 }}>{fmtTotal(Number(p.value))} QAR</span>
+            <span className="mono" style={{ fontWeight: 700 }}>{fmtDashboardAmount(Number(p.value))}</span>
           </div>
         ))}
       </div>
@@ -319,6 +407,18 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const prevMo = t(monthKeys[prevDate.getMonth()] as any);
 
+  if (isAdminWorkspace && (!resolvedUserId || !resolvedMerchantId || adminTrackerState === undefined)) {
+    return (
+      <div className="tracker-root" style={{ padding: 12 }}>
+        <div className="empty">
+          <div className="empty-t">
+            {!resolvedUserId || !resolvedMerchantId ? 'Target workspace is not ready.' : 'No tracker snapshot found for this user.'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="tracker-root" dir={t.isRTL ? 'rtl' : 'ltr'} style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }}>
       <div className="kpi-band-grid">
@@ -327,69 +427,105 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           <div className="kpi-band-cols">
             <div>
               <div className="kpi-period">{curMo}</div>
-              <div className="kpi-cell-val t1v">{fmtQWithUnit(dM.rev, settings.currency, wacop)}</div>
-              <div className="kpi-cell-sub">{dM.count} {t('trades')} · {fmtU(dM.qty, 0)} USDT</div>
+              {[
+                { label: `🏠 ${t('ownOrdersLabel')}`, val: segmentedProfit.thisMonth.ownRev, sub: `${segmentedProfit.thisMonth.ownCount} ${t('trades')} · ${fmtU(segmentedProfit.thisMonth.ownQty, 0)} USDT` },
+                { label: `📥 ${t('incomingOrders')}`, val: segmentedProfit.thisMonth.inVol, sub: `${segmentedProfit.thisMonth.inCount} ${t('deals') || 'deals'}` },
+                { label: `📤 ${t('outgoingOrders')}`, val: segmentedProfit.thisMonth.outVol, sub: `${segmentedProfit.thisMonth.outCount} ${t('deals') || 'deals'}` },
+              ].map(row => (
+                <div key={row.label} style={{ padding: '2px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500 }}>{row.label}</span>
+                    <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>{fmtDashboardAmount(row.val)}</span>
+                  </div>
+                  <div className="kpi-cell-sub" style={{ fontSize: 8, textAlign: 'end' }}>{row.sub}</div>
+                </div>
+              ))}
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('totalLabel')}</span>
+                <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: 'var(--t1)' }}>{fmtDashboardAmount(segmentedProfit.thisMonth.totalRev)}</span>
+              </div>
             </div>
             <div>
               <div className="kpi-period">{prevMo}</div>
-              <div className="kpi-cell-val t1v">{fmtQWithUnit(dL.rev, settings.currency, wacop)}</div>
-              <div className="kpi-cell-sub">{dL.count} {t('trades')} · {fmtU(dL.qty, 0)} USDT</div>
+              {[
+                { label: `🏠 ${t('ownOrdersLabel')}`, val: segmentedProfit.lastMonth.ownRev, sub: `${segmentedProfit.lastMonth.ownCount} ${t('trades')} · ${fmtU(segmentedProfit.lastMonth.ownQty, 0)} USDT` },
+                { label: `📥 ${t('incomingOrders')}`, val: segmentedProfit.lastMonth.inVol, sub: `${segmentedProfit.lastMonth.inCount} ${t('deals') || 'deals'}` },
+                { label: `📤 ${t('outgoingOrders')}`, val: segmentedProfit.lastMonth.outVol, sub: `${segmentedProfit.lastMonth.outCount} ${t('deals') || 'deals'}` },
+              ].map(row => (
+                <div key={row.label} style={{ padding: '2px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500 }}>{row.label}</span>
+                    <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>{fmtDashboardAmount(row.val)}</span>
+                  </div>
+                  <div className="kpi-cell-sub" style={{ fontSize: 8, textAlign: 'end' }}>{row.sub}</div>
+                </div>
+              ))}
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('totalLabel')}</span>
+                <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: 'var(--t1)' }}>{fmtDashboardAmount(segmentedProfit.lastMonth.totalRev)}</span>
+              </div>
             </div>
           </div>
         </div>
         <div className="kpi-band">
-          <div className="kpi-band-title">{t('netProfit')}</div>
+          <div className="kpi-band-title">{t('myNetProfit')}</div>
           <div className="kpi-band-cols">
+            {/* Current Month */}
             <div>
               <div className="kpi-period">{curMo}</div>
-              <div className={`kpi-cell-val ${dM.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dM.net, settings.currency, wacop)}</div>
-              {dM.fee > 0 && <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dM.fee, settings.currency, wacop)}</div>}
-              <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
+              {[
+                { label: `🏠 ${t('ownOrdersLabel')}`, val: segmentedProfit.thisMonth.ownNet },
+                { label: `📥 ${t('incomingOrders')}`, val: segmentedProfit.thisMonth.inMyShare },
+                { label: `📤 ${t('outgoingOrders')}`, val: segmentedProfit.thisMonth.outMyShare },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}>
+                  <span style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500 }}>{row.label}</span>
+                  <span className={`mono ${row.val >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 11, fontWeight: 700 }}>
+                    {row.val >= 0 ? '+' : ''}{fmtDashboardAmount(row.val)}
+                  </span>
+                </div>
+              ))}
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('totalLabel')}</span>
+                <span className={`mono ${segmentedProfit.thisMonth.total >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 13, fontWeight: 800 }}>
+                  {segmentedProfit.thisMonth.total >= 0 ? '+' : ''}{fmtDashboardAmount(segmentedProfit.thisMonth.total)}
+                </span>
+              </div>
             </div>
+            {/* Previous Month */}
             <div>
               <div className="kpi-period">{prevMo}</div>
-              <div className={`kpi-cell-val ${dL.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dL.net, settings.currency, wacop)}</div>
-              {dL.fee > 0 && <div className="kpi-cell-sub">{t('fees')} {fmtQWithUnit(dL.fee, settings.currency, wacop)}</div>}
-              <div className="kpi-cell-sub" style={{ fontSize: 8, marginTop: 2 }}>📤 {t('myDealsLabel')}</div>
+              {[
+                { label: `🏠 ${t('ownOrdersLabel')}`, val: segmentedProfit.lastMonth.ownNet },
+                { label: `📥 ${t('incomingOrders')}`, val: segmentedProfit.lastMonth.inMyShare },
+                { label: `📤 ${t('outgoingOrders')}`, val: segmentedProfit.lastMonth.outMyShare },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}>
+                  <span style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500 }}>{row.label}</span>
+                  <span className={`mono ${row.val >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 11, fontWeight: 700 }}>
+                    {row.val >= 0 ? '+' : ''}{fmtDashboardAmount(row.val)}
+                  </span>
+                </div>
+              ))}
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('totalLabel')}</span>
+                <span className={`mono ${segmentedProfit.lastMonth.total >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 13, fontWeight: 800 }}>
+                  {segmentedProfit.lastMonth.total >= 0 ? '+' : ''}{fmtDashboardAmount(segmentedProfit.lastMonth.total)}
+                </span>
+              </div>
             </div>
           </div>
-          {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
-            <div style={{ marginTop: 6, padding: '5px 8px', borderRadius: 6, background: 'color-mix(in srgb, var(--good) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--good) 15%, transparent)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)' }}>
-                  📥 {t('incomingDealsLabel')} ({rangeMerchantKpis.inCount}){isAdminView ? ` · ${t('myCutLabel')}` : ''}
-                </span>
-                <span className={`mono ${rangeMerchantKpis.inMyShare >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 12, fontWeight: 800 }}>
-                  {rangeMerchantKpis.inMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.inMyShare)}
-                </span>
-              </div>
-              <div style={{ fontSize: 8, color: 'var(--muted)', marginTop: 2 }}>
-                {t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.inNet)}
-              </div>
-            </div>
-          )}
-          {rangeMerchantKpis && rangeMerchantKpis.inCount > 0 && (
-            <>
-              <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderTop: '1px solid var(--line)' }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '.5px' }}>📊 {t('combinedTotal')}</span>
-                <span className={`mono ${(dR.net + rangeMerchantKpis.inMyShare) >= 0 ? 'good' : 'bad'}`} style={{ fontSize: 13, fontWeight: 800 }}>
-                  {(dR.net + rangeMerchantKpis.inMyShare) >= 0 ? '+' : ''}{fmtQWithUnit(dR.net + rangeMerchantKpis.inMyShare)}
-                </span>
-              </div>
-              <div className="kpi-cell-sub" style={{ marginTop: 2, fontSize: 8 }}>{rangeLabel(settings.range)} {t('total')}</div>
-            </>
-          )}
         </div>
       </div>
 
       <div className="kpis">
         <div className="kpi-card">
           <div className="kpi-head">
-            <span className="kpi-badge" style={badgeStyle(dR.net >= 0 ? 'good' : 'bad')}>{rLabel}</span>
+            <span className="kpi-badge" style={badgeStyle(segmentedProfit.range.total >= 0 ? 'good' : 'bad')}>{rLabel}</span>
           </div>
           <div className="kpi-lbl">{t('netProfitLabel')}</div>
-          <div className={`kpi-val ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net, settings.currency, wacop)}</div>
-          <div className="kpi-sub">{dR.count} {t('trades')} · {fmtQ(dR.rev)} {t('revSuffix')}</div>
+          <div className={`kpi-val ${segmentedProfit.range.total >= 0 ? 'good' : 'bad'}`}>{fmtDashboardAmount(segmentedProfit.range.total)}</div>
+          <div className="kpi-sub">{t('ownOrdersLabel')} {fmtDashboardAmount(segmentedProfit.range.ownNet)} · {t('incomingOrders')} {fmtDashboardAmount(segmentedProfit.range.inMyShare)} · {t('outgoingOrders')} {fmtDashboardAmount(segmentedProfit.range.outMyShare)}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-head">
@@ -409,13 +545,13 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         </div>
         <div className="kpi-card">
           <div className="kpi-head">
-            <span className="kpi-badge" style={{ color: 'var(--brand)', borderColor: 'color-mix(in srgb,var(--brand) 30%,transparent)', background: 'var(--brand3)' }}>{t('avPrice')}</span>
+            <span className="kpi-badge" style={{ color: 'var(--brand)', borderColor: 'color-mix(in srgb,var(--brand) 30%,transparent)', background: 'var(--brand3)' }}>Avg Stock Price</span>
           </div>
-          <div className="kpi-lbl">{t('avPriceSpread')}</div>
-          <div className="kpi-val" style={{ fontSize: 16, color: 'var(--t2)' }}>{wacop ? fmtP(wacop) + ' QAR' : t('noStock')}</div>
+          <div className="kpi-lbl">Average Stock Price + Spread</div>
+          <div className="kpi-val" style={{ fontSize: 16, color: 'var(--t2)' }}>{averageStockPrice ? fmtDashboardPrice(averageStockPrice) : t('noStock')}</div>
           <div className="kpi-sub">
             {(() => {
-              const sp = wacop && p2pAvgs.avgSell ? fmtPrice((p2pAvgs.avgSell - wacop) / wacop * 100) : null;
+              const sp = averageStockPrice && p2pAvgs.avgSell ? fmtPrice((p2pAvgs.avgSell - averageStockPrice) / averageStockPrice * 100) : null;
               return sp !== null
                 ? <span className={Number(sp) >= 0 ? 'good' : 'bad'} style={{ fontWeight: 700 }}>{Number(sp) >= 0 ? '+' : ''}{sp}% vs P2P</span>
                 : t('sellAboveAvPrice');
@@ -439,7 +575,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
                 </span>
               </div>
               <div className="kpi-lbl">{t('cashAvailable')}</div>
-              <div className="kpi-val" style={{ color: 'var(--warn)' }}>{fmtQWithUnit(totalCash, settings.currency, wacop)}</div>
+              <div className="kpi-val" style={{ color: 'var(--warn)' }}>{fmtDashboardAmount(totalCash)}</div>
               <div className="kpi-sub">
                 {!isAdminView && <span style={{ fontSize: 9, color: 'var(--brand)', fontWeight: 600 }}>{t('openCashMgmt')}</span>}
               </div>
@@ -448,25 +584,25 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         })()}
         <div className="kpi-card">
           <div className="kpi-head">
-            <span className="kpi-badge" style={{ color: 'var(--t5)', borderColor: 'color-mix(in srgb,var(--t5) 30%,transparent)', background: 'color-mix(in srgb,var(--t5) 10%,transparent)' }}>@{t('avPrice')}</span>
+            <span className="kpi-badge" style={{ color: 'var(--t5)', borderColor: 'color-mix(in srgb,var(--t5) 30%,transparent)', background: 'color-mix(in srgb,var(--t5) 10%,transparent)' }}>@Avg Price</span>
           </div>
           <div className="kpi-lbl">{t('buyingPower')}</div>
           {(() => {
             const cash = num(state.cashQAR, 0);
-            const refPrice = wacop || p2pAvgs.avgBuy;
-            const isFallback = !wacop && !!p2pAvgs.avgBuy;
+            const refPrice = averageStockPrice || p2pAvgs.avgBuy;
+            const isFallback = !averageStockPrice && !!p2pAvgs.avgBuy;
             return (
               <>
                 <div className="kpi-val" style={{ color: 'var(--t5)' }}>
                   {refPrice && cash > 0
                     ? fmtU(cash / refPrice, 0) + ' USDT'
                     : cash > 0
-                      ? fmtQ(cash) + ' QAR'
+                      ? fmtDashboardAmount(cash)
                       : t('setCash')}
                 </div>
                 <div className="kpi-sub">
                   {refPrice
-                    ? `@ ${fmtP(refPrice)} QAR${isFallback ? ` ${t('mktAvg')}` : ''}`
+                    ? `@ Avg ${fmtDashboardPrice(refPrice)}${isFallback ? ` ${t('mktAvg')}` : ''}`
                     : cash > 0
                       ? t('addBatchesFirst')
                       : t('addBatchesFirst')}
@@ -480,16 +616,16 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             <span className="kpi-badge" style={{ color: 'var(--good)', borderColor: 'color-mix(in srgb,var(--good) 30%,transparent)', background: 'color-mix(in srgb,var(--good) 10%,transparent)' }}>{t('net')}</span>
           </div>
           <div className="kpi-lbl">{t('netPosition')}</div>
-          <div className="kpi-val good">{fmtQWithUnit(stCost + num(state.cashQAR, 0), settings.currency, wacop)}</div>
-          <div className="kpi-sub">{t('stock')} {fmtQWithUnit(stCost, settings.currency, wacop)} + {t('cash')} {fmtQWithUnit(num(state.cashQAR, 0), settings.currency, wacop)}</div>
+          <div className="kpi-val good">{fmtDashboardAmount(stCost + num(state.cashQAR, 0))}</div>
+          <div className="kpi-sub">{t('stock')} {fmtDashboardAmount(stCost)} + {t('cash')} {fmtDashboardAmount(num(state.cashQAR, 0))}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-head">
             <span className="kpi-badge" style={{ color: 'var(--muted)', borderColor: 'color-mix(in srgb,var(--muted) 30%,transparent)', background: 'color-mix(in srgb,var(--muted) 10%,transparent)' }}>{state.batches.length} {t('batchSuffix')}</span>
           </div>
           <div className="kpi-lbl">{t('stockCostEst')}</div>
-          <div className="kpi-val" style={{ color: 'var(--text)' }}>{fmtQWithUnit(stCost, settings.currency, wacop)}</div>
-          <div className="kpi-sub">{t('avPrice')} {wacop ? fmtP(wacop) + ' QAR' : '—'}</div>
+          <div className="kpi-val" style={{ color: 'var(--text)' }}>{fmtDashboardAmount(stCost)}</div>
+          <div className="kpi-sub">Avg stock price {averageStockPrice ? fmtDashboardPrice(averageStockPrice) : '—'}</div>
         </div>
       </div>
 
@@ -586,9 +722,9 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             </div>
             <div className="kpi-lbl">{isAdminView ? `${t('outgoingNet')} · ${t('myCutLabel')}` : t('outgoingNet')}</div>
             <div className={`kpi-val ${rangeMerchantKpis.outMyShare >= 0 ? 'good' : 'bad'}`}>
-              {rangeMerchantKpis.outMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.outMyShare)}
+              {rangeMerchantKpis.outMyShare >= 0 ? '+' : ''}{fmtDashboardAmount(rangeMerchantKpis.outMyShare)}
             </div>
-            <div className="kpi-sub">{t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.outNet)}</div>
+            <div className="kpi-sub">{t('netProfitLabel')}: {fmtDashboardAmount(rangeMerchantKpis.outNet)}</div>
           </div>
         )}
 
@@ -601,9 +737,9 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
             </div>
             <div className="kpi-lbl">{isAdminView ? `${t('incomingNet')} · ${t('myCutLabel')}` : t('incomingNet')}</div>
             <div className={`kpi-val ${rangeMerchantKpis.inMyShare >= 0 ? 'good' : 'bad'}`}>
-              {rangeMerchantKpis.inMyShare >= 0 ? '+' : ''}{fmtQWithUnit(rangeMerchantKpis.inMyShare)}
+              {rangeMerchantKpis.inMyShare >= 0 ? '+' : ''}{fmtDashboardAmount(rangeMerchantKpis.inMyShare)}
             </div>
-            <div className="kpi-sub">{t('netProfitLabel')}: {fmtQWithUnit(rangeMerchantKpis.inNet)}</div>
+            <div className="kpi-sub">{t('netProfitLabel')}: {fmtDashboardAmount(rangeMerchantKpis.inNet)}</div>
           </div>
         )}
       </div>
@@ -643,10 +779,10 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
         <div className="panel">
           <div className="panel-head"><h2>{t('periodStats')}</h2><span className="pill">{rLabel}</span></div>
           <div className="panel-body">
-            <div className="prev-row"><span className="muted">{t('volume')}</span><strong className="mono t1v">{fmtQWithUnit(dR.rev, settings.currency, wacop)}</strong></div>
-            <div className="prev-row"><span className="muted">{t('cost')}</span><strong className="mono">{fmtQWithUnit(dR.rev - dR.net - dR.fee, settings.currency, wacop)}</strong></div>
-            {dR.fee > 0 && <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtQWithUnit(dR.fee, settings.currency, wacop)}</strong></div>}
-            <div className="prev-row"><span className="muted">{t('netProfitLabel')}</span><strong className={`mono ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtQWithUnit(dR.net, settings.currency, wacop)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('volume')}</span><strong className="mono t1v">{fmtDashboardAmount(dR.rev)}</strong></div>
+            <div className="prev-row"><span className="muted">{t('cost')}</span><strong className="mono">{fmtDashboardAmount(dR.rev - dR.net - dR.fee)}</strong></div>
+            {dR.fee > 0 && <div className="prev-row"><span className="muted">{t('fees')}</span><strong className="mono">{fmtDashboardAmount(dR.fee)}</strong></div>}
+            <div className="prev-row"><span className="muted">{t('netProfitLabel')}</span><strong className={`mono ${dR.net >= 0 ? 'good' : 'bad'}`}>{fmtDashboardAmount(dR.net)}</strong></div>
             <div className="prev-row"><span className="muted">{t('avgMargin')}</span><strong className="mono" style={{ color: 'var(--t3)' }}>{fmtPct(avgM)}</strong></div>
             <div className="prev-row"><span className="muted">{t('trades')}</span><strong className="mono">{dR.count}</strong></div>
           </div>
@@ -660,6 +796,7 @@ export default function DashboardPage({ adminUserId, adminMerchantId, adminTrack
           cashHistory={state.cashHistory || []}
           onSave={handleCashSave}
           onClose={() => setShowCashBox(false)}
+          baseFiatCurrency={baseFiat}
         />
       )}
     </div>

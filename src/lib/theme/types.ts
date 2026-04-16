@@ -36,13 +36,25 @@ export interface LayoutDef {
   shadow: string;
   swatches: string[];
   themes: Record<string, ThemeDef>;
+  /** font-weight for labels, headings, badges. Default '900' */
+  fontWeightUi?: string;
+  /** font-weight for large numeric values. Default '800' */
+  fontWeightVal?: string;
+  /** letter-spacing for uppercase labels. Default '.5px' */
+  labelTracking?: string;
+  /** letter-spacing for numeric values. Default '-.3px' */
+  valTracking?: string;
+  /** opacity multiplier (0–1) for decorative card ornament blob. Default '1' */
+  cardOrnament?: string;
 }
 
 export interface AppSettings {
   layout: string;
   theme: string;
   range: 'today' | '7d' | '30d' | 'this_month' | 'last_month' | 'all';
-  currency: 'QAR' | 'USDT';
+  currency: 'QAR' | 'EGP' | 'USDT';
+  /** Preferred base fiat currency for new records (QAR or EGP) */
+  baseFiatCurrency: 'QAR' | 'EGP';
   language: 'en' | 'ar';
   searchQuery: string;
   lowStockThreshold: number;

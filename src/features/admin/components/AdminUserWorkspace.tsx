@@ -21,11 +21,7 @@ import MerchantsPage from '@/pages/MerchantsPage';
 import CRMPage from '@/pages/CRMPage';
 import { fmtTotal } from '@/lib/tracker-helpers';
 import {
-  useAdminUserDeals,
-  useAdminUserSettlements,
-  useAdminUserProfits,
-  useAdminUserTracker,
-  useAdminUserProfile,
+  useAdminWorkspace,
   useAdminCorrectDeal,
   useAdminVoidDeal,
   useAdminCorrectTracker,
@@ -39,11 +35,7 @@ interface Props {
 
 export function AdminUserWorkspace({ userId, onBack }: Props) {
   const { toast } = useToast();
-  const { data: profile, isLoading: profileLoading } = useAdminUserProfile(userId);
-  const { data: deals, isLoading: dealsLoading } = useAdminUserDeals(userId);
-  const { data: settlements } = useAdminUserSettlements(userId);
-  const { data: profits } = useAdminUserProfits(userId);
-  const { data: tracker } = useAdminUserTracker(userId);
+  const { data: workspace, isLoading: workspaceLoading } = useAdminWorkspace(userId);
   const correctDeal = useAdminCorrectDeal();
   const voidDeal = useAdminVoidDeal();
   const correctTracker = useAdminCorrectTracker();
@@ -68,10 +60,38 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
   const [voidEntity, setVoidEntity] = useState<{ type: 'batch' | 'trade'; data: any } | null>(null);
   const [voidEntityReason, setVoidEntityReason] = useState('');
 
+  const workspaceProfiles = Array.isArray(workspace?.merchant_profiles) ? workspace.merchant_profiles : [];
+  const profileFallback =
+    workspaceProfiles.find((p: any) => p?.user_id === userId) ??
+    null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trackerState = tracker?.state as any;
+  const profile = (workspace?.merchant_profile ?? profileFallback) as any;
+  const trackerSnapshot = workspace?.tracker_snapshot ?? null;
+  const trackerState = trackerSnapshot?.state as any;
+  const trackerPreferences = trackerSnapshot?.preferences as any;
   const batches = Array.isArray(trackerState?.batches) ? trackerState.batches : [];
   const trades = Array.isArray(trackerState?.trades) ? trackerState.trades : [];
+  const userBaseFiat = trackerState?.settings?.baseFiatCurrency || trackerPreferences?.baseFiatCurrency || 'QAR';
+  const deals = (workspace?.deals ?? []) as any[];
+  const settlements = (workspace?.settlements ?? []) as any[];
+  const profits = (workspace?.profits ?? []) as any[];
+  const profileLoading = workspaceLoading;
+  const dealsLoading = workspaceLoading;
+  const tracker = trackerSnapshot;
+
+  const resolvedMerchantId =
+    profile?.merchant_id ??
+    workspaceProfiles.find((p: any) => p?.user_id === userId)?.merchant_id ??
+    null;
+
+  const hasAnyWorkspaceData =
+    !!profile ||
+    !!trackerSnapshot ||
+    deals.length > 0 ||
+    settlements.length > 0 ||
+    profits.length > 0 ||
+    workspaceProfiles.length > 0;
 
   const exportCSV = useCallback((filename: string, headers: string[], rows: string[][]) => {
     const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -104,7 +124,7 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
   const exportTrades = () => {
     if (!trades.length) return;
     exportCSV(`trades_${userId.slice(0,8)}.csv`,
-      ['ID','Amount USDT','Sell Price QAR','Customer','Date','Voided'],
+      ['ID','Amount USDT',`Sell Price ${userBaseFiat}`,'Customer','Date','Voided'],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       trades.map((t: any) => [t.id, t.amountUSDT ?? t.qty ?? '', t.sellPriceQAR ?? t.price ?? '', t.customer ?? '', t.ts ? new Date(t.ts).toISOString() : '', t.voided ? 'yes' : 'no'])
     );
@@ -113,9 +133,9 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
   const exportBatches = () => {
     if (!batches.length) return;
     exportCSV(`batches_${userId.slice(0,8)}.csv`,
-      ['ID','Qty','Price','Supplier','Date','Voided'],
+      ['ID','Qty USDT',`Buy Price ${userBaseFiat}`,'Supplier','Date','Voided'],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      batches.map((b: any) => [b.id, b.qty, b.price, b.supplier ?? '', b.ts ? new Date(b.ts).toISOString() : '', b.voided ? 'yes' : 'no'])
+      batches.map((b: any) => [b.id, b.initialUSDT ?? b.qty ?? '', b.buyPriceQAR ?? b.price ?? '', b.source ?? b.supplier ?? '', b.ts ? new Date(b.ts).toISOString() : '', b.voided ? 'yes' : 'no'])
     );
   };
 
@@ -125,6 +145,26 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
     exportTrades();
     exportBatches();
   };
+
+  if (workspaceLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24" />
+      </div>
+    );
+  }
+
+  if (!hasAnyWorkspaceData) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            No admin-readable workspace data found for this user.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const openEdit = (deal: any) => {
@@ -165,8 +205,8 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
     try {
       const updates: Record<string, unknown> = {};
       if (editEntity.type === 'batch') {
-        if (editEntityQty) updates.qty = Number(editEntityQty);
-        if (editEntityPrice) updates.price = Number(editEntityPrice);
+        if (editEntityQty) updates.initialUSDT = Number(editEntityQty);
+        if (editEntityPrice) updates.buyPriceQAR = Number(editEntityPrice);
       } else {
         if (editEntityQty) updates.amountUSDT = Number(editEntityQty);
         if (editEntityPrice) updates.sellPriceQAR = Number(editEntityPrice);
@@ -209,17 +249,31 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
       </div>
 
       {/* Profile card */}
-      {profileLoading ? <Skeleton className="h-24" /> : profile ? (
+      {profileLoading ? <Skeleton className="h-24" /> : (
         <Card>
           <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 text-xs">
-            <div><span className="text-muted-foreground">Display Name</span><p className="font-medium">{profile.display_name}</p></div>
-            <div><span className="text-muted-foreground">Merchant ID</span><p className="font-mono">{profile.merchant_id}</p></div>
-            <div><span className="text-muted-foreground">Region</span><p>{profile.region ?? 'â€”'}</p></div>
-            <div><span className="text-muted-foreground">Status</span><p><Badge variant="outline" className="text-[10px]">{profile.status}</Badge></p></div>
+            <div><span className="text-muted-foreground">Display Name</span><p className="font-medium">{profile?.display_name ?? '—'}</p></div>
+            <div><span className="text-muted-foreground">Merchant ID</span><p className="font-mono">{resolvedMerchantId ?? '—'}</p></div>
+            <div><span className="text-muted-foreground">Region</span><p>{profile?.region ?? '—'}</p></div>
+            <div><span className="text-muted-foreground">Status</span><p>{profile?.status ? <Badge variant="outline" className="text-[10px]">{profile.status}</Badge> : '—'}</p></div>
           </CardContent>
         </Card>
-      ) : (
-        <p className="text-sm text-muted-foreground">No merchant profile found.</p>
+      )}
+
+      {!profile && (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            No merchant profile was returned for this user. Rendering the workspace from the remaining target data only.
+          </CardContent>
+        </Card>
+      )}
+
+      {!trackerSnapshot && (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            No tracker snapshot was returned for this user. Tracker-based tabs may be empty.
+          </CardContent>
+        </Card>
       )}
 
       <Tabs defaultValue="dashboard" className="w-full">
@@ -238,7 +292,7 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
         <TabsContent value="dashboard" className="mt-3">
           <DashboardPage
             adminUserId={userId}
-            adminMerchantId={profile?.merchant_id ?? undefined}
+            adminMerchantId={resolvedMerchantId ?? undefined}
             adminTrackerState={trackerState ?? undefined}
             isAdminView
           />
@@ -247,13 +301,20 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
         <TabsContent value="merchants" className="mt-3">
           <MerchantsPage
             adminUserId={userId}
-            adminMerchantId={profile?.merchant_id ?? undefined}
+            adminMerchantId={resolvedMerchantId ?? undefined}
+            adminMerchantProfile={profile}
+            adminTrackerState={trackerState ?? undefined}
             isAdminView
           />
         </TabsContent>
 
         <TabsContent value="orders" className="mt-3">
-          <AdminOrdersMirror userId={userId} merchantId={profile?.merchant_id ?? null} trackerState={trackerState ?? null} />
+          <AdminOrdersMirror
+            userId={userId}
+            merchantId={resolvedMerchantId}
+            trackerState={trackerState ?? null}
+            workspace={workspace}
+          />
         </TabsContent>
 
         <TabsContent value="stock" className="mt-3">
@@ -262,7 +323,6 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
 
         <TabsContent value="crm" className="mt-3">
           <CRMPage
-            adminUserId={userId}
             adminTrackerState={trackerState ?? undefined}
             isAdminView
           />
@@ -384,7 +444,6 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
         </TabsContent>
 
         <TabsContent value="tracker" className="mt-3">
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           {!tracker ? (
             <p className="text-sm text-muted-foreground text-center py-6">No tracker data.</p>
           ) : (
@@ -407,7 +466,7 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
                           <TableRow>
                             <TableHead className="text-xs">ID</TableHead>
                             <TableHead className="text-xs">Qty</TableHead>
-                            <TableHead className="text-xs">Price</TableHead>
+                            <TableHead className="text-xs">Buy Price ({userBaseFiat})</TableHead>
                             <TableHead className="text-xs">Date</TableHead>
                             <TableHead className="text-xs">Status</TableHead>
                             <TableHead className="text-xs text-right">Actions</TableHead>
@@ -418,8 +477,8 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
                             <TableRow key={b.id} className={b.voided ? 'opacity-40' : ''}>
                               <TableCell className="text-xs font-mono">{String(b.id).slice(0, 8)}</TableCell>
                               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                              <TableCell className="text-xs">{b.qty}</TableCell>
-                              <TableCell className="text-xs">{b.price}</TableCell>
+                              <TableCell className="text-xs">{b.initialUSDT ?? b.qty}</TableCell>
+                              <TableCell className="text-xs">{b.buyPriceQAR ?? b.price}</TableCell>
                               <TableCell className="text-xs text-muted-foreground">
                                 {b.ts ? format(new Date(b.ts), 'MMM d, yyyy') : 'â€”'}
                               </TableCell>
@@ -429,8 +488,8 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
                               <TableCell className="text-right space-x-1">
                                 <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={() => {
                                   setEditEntity({ type: 'batch', data: b });
-                                  setEditEntityQty(String(b.qty ?? ''));
-                                  setEditEntityPrice(String(b.price ?? ''));
+                                  setEditEntityQty(String(b.initialUSDT ?? b.qty ?? ''));
+                                  setEditEntityPrice(String(b.buyPriceQAR ?? b.price ?? ''));
                                   setEditEntityReason('');
                                 }}>
                                   {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -463,7 +522,7 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
                           <TableRow>
                             <TableHead className="text-xs">ID</TableHead>
                             <TableHead className="text-xs">Qty</TableHead>
-                            <TableHead className="text-xs">Sell Price</TableHead>
+                            <TableHead className="text-xs">Sell Price ({userBaseFiat})</TableHead>
                             <TableHead className="text-xs">Customer</TableHead>
                             <TableHead className="text-xs">Date</TableHead>
                             <TableHead className="text-xs">Status</TableHead>
@@ -575,7 +634,7 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
               <Input type="number" value={editEntityQty} onChange={e => setEditEntityQty(e.target.value)} className="h-8 text-sm" />
             </div>
             <div>
-              <Label className="text-xs">{editEntity?.type === 'batch' ? 'Buy Price' : 'Sell Price (QAR)'}</Label>
+              <Label className="text-xs">{editEntity?.type === 'batch' ? 'Buy Price' : `Sell Price (${userBaseFiat})`}</Label>
               <Input type="number" value={editEntityPrice} onChange={e => setEditEntityPrice(e.target.value)} className="h-8 text-sm" />
             </div>
             <div>
@@ -616,3 +675,4 @@ export function AdminUserWorkspace({ userId, onBack }: Props) {
     </div>
   );
 }
+

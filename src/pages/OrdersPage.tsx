@@ -9,7 +9,7 @@ import {
 } from '@/lib/tracker-helpers';
 import { useTheme } from '@/lib/theme-context';
 import { useAuth } from '@/features/auth/auth-context';
-import { useT } from '@/lib/i18n';
+import { useT, getCurrencyLabel } from '@/lib/i18n';
 import * as api from '@/lib/api';
 import { supabase } from '@/integrations/supabase/client';
 import { DEAL_TYPE_CONFIGS, calculateAllocation, calculateAgreementAllocation, isAgreementActive, getAgreementLabel } from '@/lib/deal-engine';
@@ -25,6 +25,7 @@ import { calculateOperatorPriorityProfit } from '@/lib/trading/operator-priority
 import { useIsMobile } from '@/hooks/use-mobile';
 import { buildDealRowModel, parseDealMeta } from '@/features/orders/utils/dealRowModel';
 import { applyOrderCashDeposit } from '@/features/orders/utils/cashDeposit';
+import { canSubmitWithStockCoverage, computeStockCoverage, deriveSaleDraft } from '@/features/orders/utils/sale-draft';
 import '@/styles/tracker.css';
 import { focusElementBySelectors } from '@/lib/focus-target';
 
@@ -90,7 +91,13 @@ export default function OrdersPage() {
 
   const [saleDate, setSaleDate] = useState(nowInput());
   const [saleEntryMode, setSaleEntryMode] = useState<'price_vol' | 'qty_total' | 'qty_price'>('price_vol');
-  const [saleMode, setSaleMode] = useState<'USDT' | 'QAR'>('USDT');
+  const baseFiat = settings.baseFiatCurrency || 'QAR';
+  const [saleMode, setSaleMode] = useState<'USDT' | 'QAR' | 'EGP'>('USDT');
+  const activeSaleFiat = saleMode === 'USDT' ? baseFiat : saleMode;
+  const saleEntryModeLabel = baseFiat === 'EGP' ? t('entryModeUsdtEgp') : t('entryModeUsdtQar');
+  const totalReceivedLabel = activeSaleFiat === 'EGP' ? t('totalEgpReceived') : t('totalQarReceived');
+  const feeLabel = activeSaleFiat === 'EGP' ? t('feeEgpLabel') : t('feeQarLabel');
+  const autoCalcTotalLabel = activeSaleFiat === 'EGP' ? t('autoCalcTotalEgp') : t('autoCalcTotalQar');
   const [saleUsdtQty, setSaleUsdtQty] = useState('');
   const [saleAmount, setSaleAmount] = useState('');
   const [saleSell, setSaleSell] = useState('');
@@ -101,9 +108,12 @@ export default function OrdersPage() {
   const [manualBuyPrice, setManualBuyPrice] = useState('');
   const [saleFee, setSaleFee] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
+  const [newSaleSheetOpen, setNewSaleSheetOpen] = useState(false);
   const [cashDepositMode, setCashDepositMode] = useState<'none' | 'full' | 'partial'>('none');
   const [cashDepositAmount, setCashDepositAmount] = useState('');
   const [cashDepositAccountId, setCashDepositAccountId] = useState('');
+  const [stockOverrideEnabled, setStockOverrideEnabled] = useState(false);
+  const [stockOverrideConfirmed, setStockOverrideConfirmed] = useState(false);
 
   // Numeric-only handler: allows digits, one dot, and leading minus
   const numericOnly = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,6 +128,7 @@ export default function OrdersPage() {
   const [newBuyerTier, setNewBuyerTier] = useState('C');
 
   const [detailsOpen, setDetailsOpen] = useState<Record<string, boolean>>({});
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
   const [editDate, setEditDate] = useState('');
   const [editQty, setEditQty] = useState('');
@@ -168,16 +179,58 @@ export default function OrdersPage() {
   const [allocations, setAllocations] = useState<AllocationRow[]>([]);
   const { data: allAgreements = [] } = useProfitShareAgreements();
   const createAllocations = useCreateAllocations();
+  const saleDraft = useMemo(() => deriveSaleDraft({
+    saleEntryMode,
+    saleMode,
+    saleUsdtQty,
+    saleAmount,
+    saleSell,
+    saleFee,
+  }), [saleEntryMode, saleMode, saleUsdtQty, saleAmount, saleSell, saleFee]);
+  const availableFifoUsdt = useMemo(
+    () => derived.batches.reduce((sum, b) => sum + Math.max(0, b.remainingUSDT), 0),
+    [derived.batches],
+  );
+  const stockCoverage = useMemo(
+    () => computeStockCoverage(availableFifoUsdt, saleDraft.quantityUsdt),
+    [availableFifoUsdt, saleDraft.quantityUsdt],
+  );
+  const isInsufficientStock = useStock && stockCoverage.stockShortfall > 0;
+  const canSubmitSale = canSubmitWithStockCoverage(
+    stockCoverage,
+    useStock,
+    stockOverrideEnabled,
+    stockOverrideConfirmed,
+  );
+  const needsManualBuyPrice = priceMode === 'manual' && !(parseFloat(manualBuyPrice) > 0);
 
-  // Sync saleAmount into first allocation's allocatedUsdt for profit_share and sales_deal 50/50
   useEffect(() => {
-    if (selectedTemplateId === 'profit_share_family' && allocations.length > 0 && allocations[0].agreementId) {
-      setAllocations(prev => prev.map((a, i) => i === 0 ? { ...a, allocatedUsdt: saleAmount || '' } : a));
+    if (!isInsufficientStock) {
+      setStockOverrideEnabled(false);
+      setStockOverrideConfirmed(false);
     }
-    if (selectedTemplateId === 'sales_deal_family' && allocations.length > 0 && allocations[0].partnerSharePct === 50) {
-      setAllocations(prev => prev.map((a, i) => i === 0 ? { ...a, allocatedUsdt: saleAmount || '' } : a));
+  }, [isInsufficientStock]);
+
+  useEffect(() => {
+    setSaleMode((current) => (current === 'USDT' ? current : baseFiat));
+  }, [baseFiat]);
+
+  // Sync canonical sale quantity into first allocation's allocatedUsdt for profit_share and sales_deal 50/50
+  useEffect(() => {
+    const canonicalQty = saleDraft.quantityUsdt > 0 ? String(saleDraft.quantityUsdt) : '';
+    if (selectedTemplateId === 'profit_share_family') {
+      setAllocations(prev => {
+        if (prev.length === 0 || !prev[0].agreementId || prev[0].allocatedUsdt === canonicalQty) return prev;
+        return prev.map((a, i) => i === 0 ? { ...a, allocatedUsdt: canonicalQty } : a);
+      });
     }
-  }, [saleAmount]);
+    if (selectedTemplateId === 'sales_deal_family') {
+      setAllocations(prev => {
+        if (prev.length === 0 || prev[0].partnerSharePct !== 50 || prev[0].allocatedUsdt === canonicalQty) return prev;
+        return prev.map((a, i) => i === 0 ? { ...a, allocatedUsdt: canonicalQty } : a);
+      });
+    }
+  }, [saleDraft.quantityUsdt, selectedTemplateId]);
 
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [editDealTitle, setEditDealTitle] = useState('');
@@ -217,7 +270,7 @@ export default function OrdersPage() {
         family: 'profit_share' as const,
         agreementId: null,
         agreementLabel: '',
-        allocatedUsdt: saleAmount || '',
+        allocatedUsdt: saleDraft.quantityUsdt > 0 ? String(saleDraft.quantityUsdt) : '',
         merchantCostPerUsdt: '',
         partnerSharePct: 0,
         merchantSharePct: 0,
@@ -239,7 +292,7 @@ export default function OrdersPage() {
     allocations,
     linkedCounterpartyName,
     linkedCounterpartyId,
-    saleAmount,
+    saleDraft.quantityUsdt,
   ]);
 
   const editApprovedAgreements = useMemo(
@@ -368,9 +421,9 @@ export default function OrdersPage() {
   }, [settings.range, update]);
 
   const wacop = getWACOP(derived);
+  const averageStockPrice = wacop;
   /** Currency-aware formatter: respects the global QAR/USDT toggle using FIFO WACOP */
-  const fmtC = useCallback((v: number) => fmtQWithUnit(v, settings.currency, wacop), [settings.currency, wacop]);
-  useEffect(() => { if (!saleSell && wacop) setSaleSell(fmtP(wacop)); }, [wacop, saleSell]);
+  const fmtC = useCallback((v: number) => fmtQWithUnit(v, settings.currency, averageStockPrice), [settings.currency, averageStockPrice]);
 
   const rLabel = rangeLabel(state.range);
   const query = (settings.searchQuery || '').trim().toLowerCase();
@@ -661,47 +714,107 @@ export default function OrdersPage() {
     return state.customers.filter(c => normalizeName(c.name).includes(q) || c.phone.includes(buyerName));
   }, [buyerName, state.customers]);
 
+  const assertPreviewQuantityInvariant = useCallback((qty: number) => {
+    let expectedQty = qty;
+    if (saleEntryMode === 'price_vol') {
+      const rawAmount = Number(saleAmount);
+      const sell = Number(saleSell);
+      expectedQty = saleMode !== 'USDT' ? (sell > 0 ? rawAmount / sell : 0) : rawAmount;
+    } else {
+      expectedQty = Number(saleUsdtQty);
+    }
+    if (Number.isFinite(expectedQty) && Number.isFinite(qty) && Math.abs(expectedQty - qty) > 1e-6) {
+      throw new Error(`Quantity invariant violated: expected ${expectedQty}, got ${qty}`);
+    }
+  }, [saleEntryMode, saleMode, saleAmount, saleSell, saleUsdtQty]);
+
   // Sale preview computation
   const salePreview = useMemo(() => {
-    let sell: number, amountUSDT: number;
     const ts = new Date(saleDate).getTime();
-    const fee = parseFloat(saleFee) || 0;
-
-    if (saleEntryMode === 'qty_total') {
-      // USDT + QAR → auto-calc sell price
-      amountUSDT = Number(saleUsdtQty);
-      const totalQar = Number(saleAmount);
-      sell = amountUSDT > 0 ? totalQar / amountUSDT : 0;
-    } else if (saleEntryMode === 'qty_price') {
-      // USDT + Price → auto-calc total QAR
-      amountUSDT = Number(saleUsdtQty);
-      sell = Number(saleSell);
-    } else {
-      // price_vol: original mode
-      sell = Number(saleSell);
-      const raw = Number(saleAmount);
-      amountUSDT = saleMode === 'USDT' ? raw : sell > 0 ? raw / sell : 0;
-    }
+    const amountUSDT = saleDraft.quantityUsdt;
+    const sell = saleDraft.sellPriceQar;
+    const fee = saleDraft.feeQar;
 
     if (!(amountUSDT > 0) || !(sell > 0) || !Number.isFinite(ts)) return null;
+    assertPreviewQuantityInvariant(amountUSDT);
     if (priceMode === 'manual') {
       const buyP = parseFloat(manualBuyPrice) || 0;
-      const rev = amountUSDT * sell;
+      const rev = saleDraft.revenueQar;
       const cost = amountUSDT * buyP;
       const net = rev - cost - fee;
-      return { qty: amountUSDT, revenue: rev, avgBuy: buyP, cost, net };
+      return {
+        qty: amountUSDT,
+        revenue: rev,
+        avgBuy: buyP,
+        cost,
+        net,
+        fifoComplete: true,
+        coveredQty: amountUSDT,
+        uncoveredQty: 0,
+        consumed: [],
+      };
     }
-    const tmpTrade: Trade = { id: '__preview__', ts, inputMode: 'USDT', amountUSDT, sellPriceQAR: sell, feeQAR: fee, note: '', voided: false, usesStock: true, revisions: [], customerId: '' };
+    const tmpTrade: Trade = {
+      id: '__preview__',
+      ts,
+      inputMode: 'USDT',
+      amountUSDT,
+      sellPriceQAR: sell,
+      feeQAR: fee,
+      note: '',
+      voided: false,
+      usesStock: true,
+      revisions: [],
+      customerId: '',
+      linkedRelId: merchantOrderEnabled && linkedRelId ? linkedRelId : undefined,
+      linkedMerchantId: merchantOrderEnabled && linkedCounterpartyId ? linkedCounterpartyId : undefined,
+    };
     const calc = computeFIFO(state.batches, [...state.trades, tmpTrade]).tradeCalc.get('__preview__');
-    const rev = amountUSDT * sell;
-    const cost = calc?.slices.reduce((s, x) => s + x.cost, 0) || 0;
+    assertPreviewQuantityInvariant(amountUSDT);
+    const rev = saleDraft.revenueQar;
+    const cost = calc?.totalCost || 0;
+    const coveredQty = calc?.coveredQty || 0;
+    const uncoveredQty = Math.max(0, amountUSDT - coveredQty);
     const net = calc?.ok ? rev - cost - fee : NaN;
-    return { qty: amountUSDT, revenue: rev, avgBuy: calc?.ok ? calc.avgBuyQAR : NaN, cost: calc?.ok ? cost : NaN, net };
-  }, [saleAmount, saleDate, saleEntryMode, saleMode, saleUsdtQty, saleSell, saleFee, priceMode, manualBuyPrice, state.batches, state.trades]);
+    return {
+      qty: amountUSDT,
+      revenue: rev,
+      avgBuy: calc?.ok ? calc.avgBuyQAR : NaN,
+      cost: calc?.ok ? cost : NaN,
+      net,
+      fifoComplete: !!calc?.ok,
+      coveredQty,
+      uncoveredQty,
+      consumed: (calc?.slices || []).map((slice) => {
+        const batch = state.batches.find(b => b.id === slice.batchId);
+        return {
+          layerId: slice.batchId,
+          qty: slice.qty,
+          buyPrice: batch?.buyPriceQAR || 0,
+          cost: slice.cost,
+        };
+      }),
+    };
+  }, [saleDate, saleDraft, priceMode, manualBuyPrice, state.batches, state.trades, merchantOrderEnabled, linkedRelId, linkedCounterpartyId, assertPreviewQuantityInvariant]);
+  const saleFifoPreview = salePreview;
+  const manualSellPrice = saleSell;
+
+  const fifoDisplayUnitCost = useMemo(() => {
+    if (priceMode !== 'fifo' || !saleFifoPreview) return null;
+    if ((saleFifoPreview.coveredQty || 0) <= 0) return null;
+    return saleFifoPreview.cost / saleFifoPreview.coveredQty;
+  }, [priceMode, saleFifoPreview]);
 
   // Allocation preview for selected template
   const allocationPreview = useMemo(() => {
     if (!selectedTemplateId || !salePreview) return null;
+    if (!Number.isFinite(salePreview.net)) {
+      return {
+        incomplete: true as const,
+        coveredQty: salePreview.coveredQty || 0,
+        uncoveredQty: salePreview.uncoveredQty || 0,
+      };
+    }
     const tmpl = AGREEMENT_TEMPLATES.find(t => t.id === selectedTemplateId);
     if (!tmpl) return null;
     const partnerPct = tmpl.defaults.counterparty_share_pct ?? tmpl.defaults.partner_ratio ?? 0;
@@ -809,6 +922,7 @@ export default function OrdersPage() {
       cashDepositAccountId,
       sell,
       amountUSDT,
+      baseFiatCurrency: baseFiat,
       note: `${t('saleProceeds')}: ${fmtU(amountUSDT)} USDT @ ${fmtP(sell)}`,
     });
   };
@@ -871,18 +985,16 @@ export default function OrdersPage() {
     if (isCapitalTransfer) return;
 
     const ts = new Date(saleDate).getTime();
-    let sell: number, amountUSDT: number;
-    if (saleEntryMode === 'qty_total') {
-      amountUSDT = Number(saleUsdtQty);
-      const totalQar = Number(saleAmount);
-      sell = amountUSDT > 0 ? totalQar / amountUSDT : 0;
-    } else if (saleEntryMode === 'qty_price') {
-      amountUSDT = Number(saleUsdtQty);
-      sell = Number(saleSell);
-    } else {
-      sell = Number(saleSell);
-      const raw = Number(saleAmount);
-      amountUSDT = saleMode === 'USDT' ? raw : sell > 0 ? raw / sell : 0;
+    const sell = saleDraft.sellPriceQar;
+    const amountUSDT = saleDraft.quantityUsdt;
+    const feeQar = saleDraft.feeQar;
+    assertPreviewQuantityInvariant(amountUSDT);
+    if (isInsufficientStock && !canSubmitSale) {
+      setSaleMessage(
+        t('insufficientStockShortBy')
+          .replace('{qty}', stockCoverage.stockShortfall.toFixed(2)),
+      );
+      return;
     }
     const errs: string[] = [];
     if (!Number.isFinite(ts)) errs.push(t('date'));
@@ -907,12 +1019,14 @@ export default function OrdersPage() {
         inputMode: 'USDT',
         amountUSDT,
         sellPriceQAR: sell,
-        feeQAR: parseFloat(saleFee) || 0,
+        feeQAR: feeQar,
         note: '',
         voided: false,
         usesStock: true,
         revisions: [],
         customerId: '',
+        linkedRelId: merchantOrderEnabled && linkedRelId ? linkedRelId : undefined,
+        linkedMerchantId: merchantOrderEnabled && linkedCounterpartyId ? linkedCounterpartyId : undefined,
       };
       const calc = computeFIFO(state.batches, [...state.trades, previewTrade]).tradeCalc.get(previewTrade.id);
       const fifoAvg = calc?.ok ? calc.avgBuyQAR : NaN;
@@ -965,9 +1079,14 @@ export default function OrdersPage() {
     const isNewAllocFlowActive = isNewAllocFlow && allocations.length > 0;
 
     const baseTrade: Trade = {
-      id: uid(), ts, inputMode: saleEntryMode === 'price_vol' ? saleMode : 'USDT', amountUSDT, sellPriceQAR: sell, feeQAR: parseFloat(saleFee) || 0, note: '', voided: false, usesStock: useStock, revisions: [], customerId,
+      id: uid(), ts, inputMode: saleEntryMode === 'price_vol' ? saleMode : 'USDT', amountUSDT, sellPriceQAR: sell, feeQAR: feeQar,
+      note: isInsufficientStock && canSubmitSale
+        ? `manual_cost_basis: true | fifo_uncovered_qty: ${stockCoverage.stockShortfall} | stock_shortfall_override: true`
+        : '',
+      voided: false, usesStock: useStock, revisions: [], customerId,
       manualBuyPrice: priceMode === 'manual' ? (parseFloat(manualBuyPrice) || 0) : undefined,
       linkedRelId: merchantOrderEnabled ? (isNewAllocFlowActive ? allocations[0]?.relationshipId : linkedRelId) || undefined : undefined,
+      linkedMerchantId: merchantOrderEnabled ? (isNewAllocFlowActive ? (allocations[0]?.merchantId || linkedCounterpartyId) : linkedCounterpartyId) || undefined : undefined,
       agreementFamily: isNewAllocFlowActive
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ? (selectedTemplateId === 'profit_share_family' ? 'profit_share' : 'sales_deal') as any
@@ -982,11 +1101,10 @@ export default function OrdersPage() {
     if (merchantOrderEnabled && isNewAllocFlowActive) {
       try {
         const saleGroupId = crypto.randomUUID();
-        const fee = parseFloat(saleFee) || 0;
+        const fee = feeQar;
         const customerName = buyerName.trim() || t('buyer');
-        const c = computeFIFO(state.batches, [...state.trades, baseTrade]).tradeCalc.get(baseTrade.id);
-        const fifoCost = c?.ok ? c.slices.reduce((s, x) => s + x.cost, 0) : 0;
-        const avgBuy = priceMode === 'manual' ? (parseFloat(manualBuyPrice) || 0) : (c?.ok ? c.avgBuyQAR : 0);
+        const fifoCost = Number.isFinite(salePreview?.cost) ? salePreview.cost : 0;
+        const avgBuy = priceMode === 'manual' ? (parseFloat(manualBuyPrice) || 0) : (Number.isFinite(salePreview?.avgBuy) ? (salePreview?.avgBuy || 0) : 0);
 
         // Create a merchant_deals record for EACH allocation so it shows in partner's inbox
         const createdDealIds: string[] = [];
@@ -1007,6 +1125,13 @@ export default function OrdersPage() {
             `fifo_cost: ${fifoCost}`,
             `avg_buy: ${avgBuy}`,
             `fee: ${fee}`,
+            ...(isInsufficientStock && canSubmitSale
+              ? [
+                  'manual_cost_basis: true',
+                  `fifo_uncovered_qty: ${stockCoverage.stockShortfall}`,
+                  'stock_shortfall_override: true',
+                ]
+              : []),
             `merchant_cost: ${costPerUsdt}`,
             alloc.family === 'profit_share'
               ? `partner_ratio: ${alloc.partnerSharePct}, merchant_ratio: ${alloc.merchantSharePct}`
@@ -1033,6 +1158,9 @@ export default function OrdersPage() {
                 merchant_cost: costPerUsdt,
                 partner_ratio: alloc.partnerSharePct,
                 merchant_ratio: alloc.merchantSharePct,
+                manual_cost_basis: isInsufficientStock && canSubmitSale,
+                fifo_uncovered_qty: isInsufficientStock && canSubmitSale ? stockCoverage.stockShortfall : 0,
+                stock_shortfall_override: isInsufficientStock && canSubmitSale,
               };
               if (selAgreement?.agreement_type === 'operator_priority') {
                 base.agreement_type = 'operator_priority';
@@ -1136,6 +1264,7 @@ export default function OrdersPage() {
         setLinkedRelId('');
         setSelectedTemplateId(null);
         setAllocations([]);
+        if (isMobile) setNewSaleSheetOpen(false);
         return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (err: any) {
@@ -1150,18 +1279,16 @@ export default function OrdersPage() {
       // Create backend deal first so local outgoing state only exists when partner can actually receive it.
       try {
         const customerName = buyerName.trim() || t('buyer');
-        const currency = saleMode === 'QAR' ? 'QAR' : 'USDT';
-        const amount = Number(saleAmount) || 0;
-        const sell = Number(saleSell) || 0;
-        const fee = parseFloat(saleFee) || 0;
+        const currency = saleMode === 'USDT' ? 'USDT' : baseFiat;
+        const sell = saleDraft.sellPriceQar;
+        const fee = feeQar;
 
         const familyLabel = tmpl.family === 'profit_share' ? t('profitShareLabel') : t('salesDealLabel');
         const title = `${familyLabel} · ${customerName} · ${tmpl.ratioDisplay}`;
 
         // Store trade data in notes so partner can see qty/sell/cost
-        const c = computeFIFO(state.batches, [...state.trades, baseTrade]).tradeCalc.get(baseTrade.id);
-        const fifoCost = c?.ok ? c.slices.reduce((s, x) => s + x.cost, 0) : 0;
-        const avgBuy = priceMode === 'manual' ? (parseFloat(manualBuyPrice) || 0) : (c?.ok ? c.avgBuyQAR : 0);
+        const fifoCost = Number.isFinite(salePreview?.cost) ? salePreview.cost : 0;
+        const avgBuy = priceMode === 'manual' ? (parseFloat(manualBuyPrice) || 0) : (Number.isFinite(salePreview?.avgBuy) ? (salePreview?.avgBuy || 0) : 0);
 
         const noteLines = [
           `template: ${tmpl.id}`,
@@ -1173,6 +1300,13 @@ export default function OrdersPage() {
           `fifo_cost: ${fifoCost}`,
           `avg_buy: ${avgBuy}`,
           `fee: ${fee}`,
+          ...(isInsufficientStock && canSubmitSale
+            ? [
+                'manual_cost_basis: true',
+                `fifo_uncovered_qty: ${stockCoverage.stockShortfall}`,
+                'stock_shortfall_override: true',
+              ]
+            : []),
           tmpl.dealType === 'partnership'
             ? `partner_ratio: ${tmpl.defaults.partner_ratio}, merchant_ratio: ${tmpl.defaults.merchant_ratio}`
             : `counterparty_share: ${tmpl.defaults.counterparty_share_pct}%, merchant_share: ${tmpl.defaults.merchant_share_pct}%`,
@@ -1192,6 +1326,9 @@ export default function OrdersPage() {
             sell_price: sell,
             avg_buy: avgBuy,
             fee,
+            manual_cost_basis: isInsufficientStock && canSubmitSale,
+            fifo_uncovered_qty: isInsufficientStock && canSubmitSale ? stockCoverage.stockShortfall : 0,
+            stock_shortfall_override: isInsufficientStock && canSubmitSale,
             partner_ratio: tmpl.defaults.counterparty_share_pct ?? tmpl.defaults.partner_ratio ?? null,
             merchant_ratio: tmpl.defaults.merchant_share_pct ?? tmpl.defaults.merchant_ratio ?? null,
           },
@@ -1286,6 +1423,10 @@ export default function OrdersPage() {
     setCashDepositMode('none');
     setCashDepositAmount('');
     setCashDepositAccountId('');
+    setStockOverrideEnabled(false);
+    setStockOverrideConfirmed(false);
+    // Close mobile sheet after successful submission
+    if (isMobile) setNewSaleSheetOpen(false);
   };
 
   const exportCsv = () => {
@@ -1408,7 +1549,7 @@ export default function OrdersPage() {
           deal_type: dealType,
           title,
           amount: rev,
-          currency: 'QAR',
+          currency: baseFiat,
           status: 'pending',
           created_by: userId!,
           notes: noteLines,
@@ -1525,6 +1666,7 @@ export default function OrdersPage() {
       cashDepositAccountId: editCashDepositAccountId,
       sell,
       amountUSDT: qty,
+      baseFiatCurrency: baseFiat,
       note: `${t('saleProceeds')}: ${fmtU(qty)} USDT @ ${fmtP(sell)}`,
     });
     applyState(stateWithEditDeposit);
@@ -1913,81 +2055,94 @@ export default function OrdersPage() {
     const cn = state.customers.find(x => x.id === tr.customerId)?.name || '—';
     const linkedRel = isMerchantLinked ? relationships.find(r => r.id === tr.linkedRelId) : null;
 
+    const isExpanded = !!expandedCards[tr.id];
+
     return (
-      <div key={`mobile-trade-${tr.id}`} className="previewBox" style={{ padding: 10, marginBottom: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-          <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="mono">{fmtDate(tr.ts)}</span>
-            <span className="pill" style={{ fontSize: 9, color: isMerchantLinked ? 'var(--brand)' : 'var(--muted)' }}>
-              {isMerchantLinked ? '🤝 Linked' : '👤 Trade'}
-            </span>
-            {getApprovalStatusBadge(tr.approvalStatus as LinkedTradeStatus | undefined)}
+      <div key={`mobile-trade-${tr.id}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+        {/* ── Compact summary row ── */}
+        <button
+          onClick={() => setExpandedCards(prev => ({ ...prev, [tr.id]: !prev[tr.id] }))}
+          style={{ width: '100%', background: 'none', border: 'none', padding: '12px 14px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, transition: 'background 0.1s', WebkitTapHighlightColor: 'transparent' }}
+          onPointerDown={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+          onPointerUp={e => (e.currentTarget.style.background = 'none')}
+          onPointerLeave={e => (e.currentTarget.style.background = 'none')}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, lineHeight: 1.2, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cn}</span>
+              <span style={{ fontSize: 9, color: isMerchantLinked ? 'var(--brand)' : 'var(--muted)', flexShrink: 0 }}>{isMerchantLinked ? '🤝' : '👤'}</span>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{fmtDate(tr.ts)}</div>
           </div>
-        </div>
-        <div style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span className="muted">{t('buyer')}</span>
-            <strong style={{ fontSize: 11, textAlign: 'right' }}>{cn}</strong>
-          </div>
-          {isMerchantLinked && linkedRel && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-              <span className="muted">{t('merchant')}</span>
-              <strong style={{ fontSize: 11, textAlign: 'right' }}>{linkedRel.counterparty?.display_name || '—'}</strong>
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('qty')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtU(linkedRow?.quantity ?? tr.amountUSDT)}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('sell')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtP(linkedRow?.sellPrice ?? tr.sellPriceQAR)}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('volume')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtC(rev)}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('avgBuy')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{ok ? fmtP(linkedRow?.avgBuy ?? c?.avgBuyQAR ?? 0) : '—'}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+            <strong className="mono" style={{ fontSize: 13, letterSpacing: '-0.02em' }}>{fmtU(linkedRow?.quantity ?? tr.amountUSDT)} USDT</strong>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>@ {fmtP(linkedRow?.sellPrice ?? tr.sellPriceQAR)}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>= {fmtTotal(rev)} {baseFiat}</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {Number.isFinite(net) && (
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: net >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                  {net >= 0 ? '+' : ''}{fmtC(net)}
+                </span>
+              )}
+              {getApprovalStatusBadge(tr.approvalStatus as LinkedTradeStatus | undefined)}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s cubic-bezier(0.4,0,0.2,1)', flexShrink: 0, filter: 'drop-shadow(0 0 2px color-mix(in srgb, var(--brand) 30%, transparent))' }}><path d="M6 9l6 6 6-6"/></svg>
             </div>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span className="muted">{t('net')}</span>
-            <span style={{ color: Number.isFinite(net) ? (net >= 0 ? 'var(--good)' : 'var(--bad)') : 'var(--muted)', fontWeight: 700, fontSize: 11 }}>
-              {Number.isFinite(net) ? `${net >= 0 ? '+' : ''}${fmtC(net)}` : '—'}
-            </span>
-          </div>
-        </div>
+        </button>
 
-        <div className="actionsRow" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-          <button
-            className="rowBtn"
-            style={{ minHeight: 40 }}
-            onClick={() => setDetailsOpen(prev => ({ ...prev, [tr.id]: !prev[tr.id] }))}
-          >
-            {detailsOpen[tr.id] ? t('hideDetails') : t('details')}
-          </button>
-          {(!tr.approvalStatus || tr.approvalStatus === 'pending_approval') && (
-            <button className="rowBtn" style={{ minHeight: 40 }} onClick={() => openEdit(tr.id)}>{t('edit')}</button>
-          )}
-          {tr.approvalStatus === 'pending_approval' && (
-            <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => handleCancelTrade(tr.id)}>{t('cancel')}</button>
-          )}
-          {tr.approvalStatus === 'approved' && (
-            <button className="rowBtn" style={{ color: 'var(--warn)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => handleCancelTrade(tr.id)}>{t('requestCancellation')}</button>
-          )}
-        </div>
-
-        {detailsOpen[tr.id] && (
-          <div style={{ marginTop: 8 }}>
-            {renderDetail(tr, c)}
+        {/* ── Expanded detail ── */}
+        {isExpanded && (
+          <div style={{ padding: '0 10px 10px', borderTop: '1px solid var(--line2)' }}>
+            <div style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
+              {isMerchantLinked && linkedRel && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span className="muted">{t('merchant')}</span>
+                  <strong style={{ fontSize: 11, textAlign: 'right' }}>{linkedRel.counterparty?.display_name || '—'}</strong>
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('qty')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtU(linkedRow?.quantity ?? tr.amountUSDT)}</div>
+                </div>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('sell')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtP(linkedRow?.sellPrice ?? tr.sellPriceQAR)}</div>
+                </div>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('volume')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtC(rev)}</div>
+                </div>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('avgBuy')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{ok ? fmtP(linkedRow?.avgBuy ?? c?.avgBuyQAR ?? 0) : '—'}</div>
+                </div>
+              </div>
+            </div>
+            <div className="actionsRow" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+              <button className="rowBtn" style={{ minHeight: 40 }} onClick={() => setDetailsOpen(prev => ({ ...prev, [tr.id]: !prev[tr.id] }))}>
+                {detailsOpen[tr.id] ? t('hideDetails') : t('details')}
+              </button>
+              {(!tr.approvalStatus || tr.approvalStatus === 'pending_approval') && (
+                <button className="rowBtn" style={{ minHeight: 40 }} onClick={() => openEdit(tr.id)}>{t('edit')}</button>
+              )}
+              {tr.approvalStatus === 'pending_approval' && (
+                <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => handleCancelTrade(tr.id)}>{t('cancel')}</button>
+              )}
+              {tr.approvalStatus === 'approved' && (
+                <button className="rowBtn" style={{ color: 'var(--warn)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => handleCancelTrade(tr.id)}>{t('requestCancellation')}</button>
+              )}
+            </div>
+            {detailsOpen[tr.id] && (
+              <div style={{ marginTop: 8 }}>
+                {renderDetail(tr, c)}
+              </div>
+            )}
           </div>
         )}
       </div>
     );
-  }, [derived.tradeCalc, resolveLinkedOutgoingDeal, resolveDealAvgBuy, relationships, state.customers, t, detailsOpen, renderDetail, openEdit, handleCancelTrade]);
+  }, [derived.tradeCalc, resolveLinkedOutgoingDeal, resolveDealAvgBuy, relationships, state.customers, t, detailsOpen, expandedCards, renderDetail, openEdit, handleCancelTrade, fmtC, fmtU, fmtP]);
 
   const renderOrdersMobileCard = useCallback((deal: MerchantDeal, perspective: 'incoming' | 'outgoing') => {
     const rel = relationships.find(r => r.id === deal.relationship_id);
@@ -2003,154 +2158,176 @@ export default function OrdersPage() {
     const sc = statusColors[deal.status] || statusColors.pending;
     const marginLabel = row.margin != null && row.margin !== 0 ? `${(row.margin * 100).toFixed(2)}% ${t('marginLabel')}` : '—';
 
+    const cardKey = `deal-${deal.id}`;
+    const isExpanded = !!expandedCards[cardKey];
+    const netDisplay = !row.hasAvgBuy ? null
+      : (row.myNet ?? row.fullNet ?? null);
+
     return (
-      <div key={`mobile-${deal.id}`} id={`deal-${deal.id}`} data-deal-id={deal.id} className="previewBox" style={{ padding: 10, marginBottom: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-          <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="mono">{row.dateLabel}</span>
-            <span className="pill" style={{ fontSize: 9, background: sc.bg, color: sc.color, fontWeight: 700 }}>{deal.status}</span>
-            <span className="pill" style={{ fontSize: 9, color: 'var(--brand)' }}>{row.familyIcon} {row.familyLabel}</span>
-            {row.splitLabel && <span className="pill" style={{ fontSize: 9, color: 'var(--brand)' }}>{row.splitLabel}</span>}
-          </div>
-          {row.margin != null && <span className="pill" style={{ fontSize: 9 }}>{marginLabel}</span>}
-        </div>
-
-        <div style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span className="muted">{t('merchant')}</span>
-            <strong style={{ fontSize: 11, textAlign: 'right', maxWidth: '62%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{merchantName}</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span className="muted">{t('buyer')}</span>
-            <strong style={{ fontSize: 11, textAlign: 'right', maxWidth: '62%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.buyer || '—'}</strong>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('qty')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtU(row.quantity)}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('avgBuy')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{row.hasAvgBuy ? fmtP(row.avgBuy) : '—'}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('sell')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{row.sellPrice > 0 ? fmtP(row.sellPrice) : '—'}</div>
-            </div>
-            <div className="panel" style={{ padding: 6 }}>
-              <div className="muted" style={{ fontSize: 9 }}>{t('volume')}</div>
-              <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtC(row.volume)}</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span className="muted">{t('net')}</span>
-            {!row.hasAvgBuy ? (
-              <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>
-            ) : row.myPct != null && row.fullNet != null && row.myNet != null && row.fullNet !== row.myNet ? (
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, maxWidth: '64%' }}>
-                <span style={{ color: 'var(--muted)', fontSize: 9, textDecoration: 'line-through' }}>
-                  {row.fullNet >= 0 ? '+' : ''}{fmtC(row.fullNet)}
-                </span>
-                <span style={{ color: row.myNet >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 700, fontSize: 11, textAlign: 'right' }}>
-                  {row.myNet >= 0 ? '+' : ''}{fmtC(row.myNet)} <span style={{ fontSize: 9, opacity: 0.7 }}>({t('myCut')})</span>
-                </span>
-              </span>
-            ) : (
-              <span style={{ color: (row.myNet ?? 0) >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 700, fontSize: 11 }}>
-                {row.myNet != null && row.myNet !== 0 ? `${row.myNet >= 0 ? '+' : ''}${fmtC(row.myNet)}` : '—'}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Toggle details */}
+      <div key={`mobile-${deal.id}`} id={cardKey} data-deal-id={deal.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+        {/* ── Compact summary row ── */}
         <button
-          className="rowBtn"
-          style={{ width: '100%', minHeight: 36, marginBottom: 6, fontSize: 11 }}
-          onClick={() => setDetailsOpen(prev => ({ ...prev, [`deal-${deal.id}`]: !prev[`deal-${deal.id}`] }))}
+          onClick={() => setExpandedCards(prev => ({ ...prev, [cardKey]: !prev[cardKey] }))}
+          style={{ width: '100%', background: 'none', border: 'none', padding: '12px 14px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, transition: 'background 0.1s', WebkitTapHighlightColor: 'transparent' }}
+          onPointerDown={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+          onPointerUp={e => (e.currentTarget.style.background = 'none')}
+          onPointerLeave={e => (e.currentTarget.style.background = 'none')}
         >
-          {detailsOpen[`deal-${deal.id}`] ? `▼ ${t('hideDetails')}` : `▶ ${t('details')}`}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, lineHeight: 1.2, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{merchantName}</span>
+              <span style={{ fontSize: 9, color: 'var(--brand)', flexShrink: 0 }}>{row.familyIcon}</span>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{row.dateLabel}</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+            <strong className="mono" style={{ fontSize: 13, letterSpacing: '-0.02em' }}>{fmtU(row.quantity)} USDT</strong>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>@ {row.sellPrice > 0 ? fmtP(row.sellPrice) : '—'}</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {netDisplay != null && (
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: netDisplay >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                  {netDisplay >= 0 ? '+' : ''}{fmtC(netDisplay)}
+                </span>
+              )}
+              <span className={`pill ${deal.status === 'approved' ? 'good' : deal.status === 'rejected' ? 'bad' : 'warn'}`} style={{ fontSize: 9 }}>{deal.status}</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s cubic-bezier(0.4,0,0.2,1)', flexShrink: 0, filter: 'drop-shadow(0 0 2px color-mix(in srgb, var(--brand) 30%, transparent))' }}><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+          </div>
         </button>
 
-        {detailsOpen[`deal-${deal.id}`] && (
-          <div style={{ marginBottom: 8, padding: 8, background: 'color-mix(in srgb, var(--panel2) 60%, transparent)', borderRadius: 6 }}>
-            {/* Each party's cut */}
-            {row.hasAvgBuy && row.fullNet != null && (
-              <div style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
-            {(() => {
-              const names = resolveOpNames(row, rel, merchantProfile?.merchant_id, merchantProfileMap, merchantProfile?.display_name || 'Me');
-              return row.isOperatorPriority && row.operatorFee != null ? (
-              <>
-                <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--warn) 10%, transparent)', fontSize: 11 }}>
-                  ⚙️ {t('simOperatorFee')}: <strong style={{ color: 'var(--warn)', marginLeft: 4 }}>{fmtC(row.operatorFee)}</strong>
+        {/* ── Expanded detail ── */}
+        {isExpanded && (
+          <div style={{ padding: '0 10px 10px', borderTop: '1px solid var(--line2)' }}>
+            <div style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span className="muted">{t('buyer')}</span>
+                <strong style={{ fontSize: 11, textAlign: 'right', maxWidth: '62%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.buyer || '—'}</strong>
+              </div>
+              {row.margin != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span className="muted">{t('marginLabel')}</span>
+                  <span className="mono" style={{ fontSize: 11 }}>{marginLabel}</span>
                 </div>
-                <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--good) 10%, transparent)', fontSize: 11 }}>
-                  📊 {names.operatorName} ({t('operatorGets')}): <strong style={{ color: 'var(--good)', marginLeft: 4 }}>{fmtC(row.operatorTotal ?? 0)}</strong>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('qty')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtU(row.quantity)}</div>
                 </div>
-                <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--brand) 10%, transparent)', fontSize: 11 }}>
-                  🤝 {names.lenderName} ({t('lenderGets')}): <strong style={{ color: 'var(--brand)', marginLeft: 4 }}>{fmtC(row.lenderTotal ?? 0)}</strong>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('avgBuy')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{row.hasAvgBuy ? fmtP(row.avgBuy) : '—'}</div>
                 </div>
-              </>
-              ) : (
-              <>
-                <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--good) 10%, transparent)', fontSize: 11 }}>
-                  📊 {perspective === 'outgoing' ? (merchantProfile?.display_name || 'Me') : merchantName} ({row.merchantPct}%):
-                  <strong style={{ color: 'var(--good)', marginLeft: 4 }}>
-                    {fmtC(row.fullNet * (row.merchantPct! / 100))}
-                  </strong>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('sell')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{row.sellPrice > 0 ? fmtP(row.sellPrice) : '—'}</div>
                 </div>
-                <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--brand) 10%, transparent)', fontSize: 11 }}>
-                  🤝 {perspective === 'outgoing' ? merchantName : (merchantProfile?.display_name || 'Me')} ({row.partnerPct}%):
-                  <strong style={{ color: 'var(--brand)', marginLeft: 4 }}>
-                    {fmtC(row.fullNet * (row.partnerPct! / 100))}
-                  </strong>
+                <div className="panel" style={{ padding: 6 }}>
+                  <div className="muted" style={{ fontSize: 9 }}>{t('volume')}</div>
+                  <div className="mono" style={{ fontSize: 11, fontWeight: 700 }}>{fmtC(row.volume)}</div>
                 </div>
-              </>
-            );
-            })()}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span className="muted">{t('net')}</span>
+                {!row.hasAvgBuy ? (
+                  <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>
+                ) : row.myPct != null && row.fullNet != null && row.myNet != null && row.fullNet !== row.myNet ? (
+                  <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+                    <span style={{ color: 'var(--muted)', fontSize: 9, textDecoration: 'line-through' }}>{row.fullNet >= 0 ? '+' : ''}{fmtC(row.fullNet)}</span>
+                    <span style={{ color: row.myNet >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 700, fontSize: 11 }}>
+                      {row.myNet >= 0 ? '+' : ''}{fmtC(row.myNet)} <span style={{ fontSize: 9, opacity: 0.7 }}>({t('myCut')})</span>
+                    </span>
+                  </span>
+                ) : (
+                  <span style={{ color: (row.myNet ?? 0) >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 700, fontSize: 11 }}>
+                    {row.myNet != null && row.myNet !== 0 ? `${row.myNet >= 0 ? '+' : ''}${fmtC(row.myNet)}` : '—'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <button
+              className="rowBtn"
+              style={{ width: '100%', minHeight: 36, marginBottom: 6, fontSize: 11 }}
+              onClick={() => setDetailsOpen(prev => ({ ...prev, [cardKey]: !prev[cardKey] }))}
+            >
+              {detailsOpen[cardKey] ? `▼ ${t('hideDetails')}` : `▶ ${t('details')}`}
+            </button>
+
+            {detailsOpen[cardKey] && (
+              <div style={{ marginBottom: 8, padding: 8, background: 'color-mix(in srgb, var(--panel2) 60%, transparent)', borderRadius: 6 }}>
+                {row.hasAvgBuy && row.fullNet != null && (
+                  <div style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
+                    {(() => {
+                      const names = resolveOpNames(row, rel, merchantProfile?.merchant_id, merchantProfileMap, merchantProfile?.display_name || 'Me');
+                      return row.isOperatorPriority && row.operatorFee != null ? (
+                        <>
+                          <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--warn) 10%, transparent)', fontSize: 11 }}>
+                            ⚙️ {t('simOperatorFee')}: <strong style={{ color: 'var(--warn)', marginLeft: 4 }}>{fmtC(row.operatorFee)}</strong>
+                          </div>
+                          <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--good) 10%, transparent)', fontSize: 11 }}>
+                            📊 {names.operatorName} ({t('operatorGets')}): <strong style={{ color: 'var(--good)', marginLeft: 4 }}>{fmtC(row.operatorTotal ?? 0)}</strong>
+                          </div>
+                          <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--brand) 10%, transparent)', fontSize: 11 }}>
+                            🤝 {names.lenderName} ({t('lenderGets')}): <strong style={{ color: 'var(--brand)', marginLeft: 4 }}>{fmtC(row.lenderTotal ?? 0)}</strong>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--good) 10%, transparent)', fontSize: 11 }}>
+                            📊 {perspective === 'outgoing' ? (merchantProfile?.display_name || 'Me') : merchantName} ({row.merchantPct}%):
+                            <strong style={{ color: 'var(--good)', marginLeft: 4 }}>{fmtC(row.fullNet * (row.merchantPct! / 100))}</strong>
+                          </div>
+                          <div style={{ padding: '6px 10px', borderRadius: 4, background: 'color-mix(in srgb, var(--brand) 10%, transparent)', fontSize: 11 }}>
+                            🤝 {perspective === 'outgoing' ? merchantName : (merchantProfile?.display_name || 'Me')} ({row.partnerPct}%):
+                            <strong style={{ color: 'var(--brand)', marginLeft: 4 }}>{fmtC(row.fullNet * (row.partnerPct! / 100))}</strong>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                  <span className="pill">{row.dateLabel}</span>
+                  {row.hasAvgBuy && <span className="pill">{t('avgBuy')} {fmtP(row.avgBuy)}</span>}
+                  <span className="pill">{t('revenue')} {fmtC(row.volume)}</span>
+                  {row.fee > 0 && <span className="pill">{t('fee')} {fmtC(row.fee)}</span>}
+                  {row.hasAvgBuy && row.cost > 0 && <span className="pill">{t('cost')} {fmtC(row.cost)}</span>}
+                  <span className={`pill ${row.fullNet != null ? (row.fullNet >= 0 ? 'good' : 'bad') : ''}`}>
+                    {t('net')} {row.fullNet != null ? `${row.fullNet >= 0 ? '+' : ''}${fmtC(row.fullNet)}` : '—'}
+                  </span>
+                </div>
               </div>
             )}
-            {/* Chips row */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              <span className="pill">{row.dateLabel}</span>
-              {row.hasAvgBuy && <span className="pill">{t('avgBuy')} {fmtP(row.avgBuy)}</span>}
-              <span className="pill">{t('revenue')} {fmtC(row.volume)}</span>
-              {row.fee > 0 && <span className="pill">{t('fee')} {fmtC(row.fee)}</span>}
-              {row.hasAvgBuy && row.cost > 0 && <span className="pill">{t('cost')} {fmtC(row.cost)}</span>}
-              <span className={`pill ${row.fullNet != null ? (row.fullNet >= 0 ? 'good' : 'bad') : ''}`}>
-                {t('net')} {row.fullNet != null ? `${row.fullNet >= 0 ? '+' : ''}${fmtC(row.fullNet)}` : '—'}
-              </span>
+
+            <div className="actionsRow" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+              {perspective === 'incoming' && deal.status === 'pending' && (
+                <>
+                  <button className="rowBtn" style={{ color: 'var(--good)', fontWeight: 700, minHeight: 40 }} onClick={() => approveIncomingDeal(deal.id)}>{t('approve')}</button>
+                  <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40 }} onClick={() => rejectIncomingDeal(deal.id)}>{t('reject')}</button>
+                </>
+              )}
+              {perspective === 'incoming' && deal.status === 'approved' && (
+                <span className="pill" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--good) 15%, transparent)', color: 'var(--good)', fontWeight: 700, gridColumn: '1 / -1', textAlign: 'center' }}>✅ {t('approvedStatus')}</span>
+              )}
+              {perspective === 'incoming' && deal.status === 'rejected' && (
+                <span className="pill" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--bad) 15%, transparent)', color: 'var(--bad)', fontWeight: 700, gridColumn: '1 / -1', textAlign: 'center' }}>❌ {t('rejectedStatus')}</span>
+              )}
+              {perspective === 'outgoing' && deal.status === 'pending' && (
+                <>
+                  <button className="rowBtn" onClick={() => openDealEdit(deal)} style={{ minHeight: 40 }}>{t('edit')}</button>
+                  <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40 }} onClick={() => setDeleteDealConfirm(deal.id)}>{t('cancel')}</button>
+                </>
+              )}
+              {perspective === 'outgoing' && deal.status === 'approved' && (
+                <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => setDeleteDealConfirm(deal.id)}>{t('cancel')}</button>
+              )}
             </div>
           </div>
         )}
-
-        <div className="actionsRow" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-          {perspective === 'incoming' && deal.status === 'pending' && (
-            <>
-              <button className="rowBtn" style={{ color: 'var(--good)', fontWeight: 700, minHeight: 40 }} onClick={() => approveIncomingDeal(deal.id)}>{t('approve')}</button>
-              <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40 }} onClick={() => rejectIncomingDeal(deal.id)}>{t('reject')}</button>
-            </>
-          )}
-          {perspective === 'incoming' && deal.status === 'approved' && (
-            <span className="pill" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--good) 15%, transparent)', color: 'var(--good)', fontWeight: 700, gridColumn: '1 / -1', textAlign: 'center' }}>✅ {t('approvedStatus')}</span>
-          )}
-          {perspective === 'incoming' && deal.status === 'rejected' && (
-            <span className="pill" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--bad) 15%, transparent)', color: 'var(--bad)', fontWeight: 700, gridColumn: '1 / -1', textAlign: 'center' }}>❌ {t('rejectedStatus')}</span>
-          )}
-
-          {perspective === 'outgoing' && deal.status === 'pending' && (
-            <>
-              <button className="rowBtn" onClick={() => openDealEdit(deal)} style={{ minHeight: 40 }}>{t('edit')}</button>
-              <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40 }} onClick={() => setDeleteDealConfirm(deal.id)}>{t('cancel')}</button>
-            </>
-          )}
-          {perspective === 'outgoing' && deal.status === 'approved' && (
-            <button className="rowBtn" style={{ color: 'var(--bad)', minHeight: 40, gridColumn: '1 / -1' }} onClick={() => setDeleteDealConfirm(deal.id)}>{t('cancel')}</button>
-          )}
-        </div>
       </div>
     );
-  }, [relationships, t, resolveDealAvgBuy, approveIncomingDeal, rejectIncomingDeal, openDealEdit, detailsOpen, fmtC, merchantProfile, merchantProfileMap, allAgreements]);
+  }, [relationships, t, resolveDealAvgBuy, approveIncomingDeal, rejectIncomingDeal, openDealEdit, detailsOpen, expandedCards, fmtC, fmtP, fmtU, merchantProfile, merchantProfileMap, allAgreements]);
 
   const inKpi = useMemo(() => {
     let vol = 0, netVal = 0;
@@ -2194,7 +2371,7 @@ export default function OrdersPage() {
   };
 
   return (
-    <div className="tracker-root" dir={t.isRTL ? 'rtl' : 'ltr'} style={{ padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: '100%' }}>
+    <div className={`tracker-root${isMobile ? ' orders-mobile-root' : ''}${isMobile && newSaleSheetOpen ? ' sale-sheet-open' : ''}`} dir={t.isRTL ? 'rtl' : 'ltr'} style={{ padding: isMobile ? '6px 0' : '6px 10px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: '100%' }}>
 
       {/* ─── TAB BAR ─── */}
       <div className="orders-tab-bar">
@@ -2268,7 +2445,7 @@ export default function OrdersPage() {
                   <div className="empty-s">{t('addBatchThenSale')}</div>
                 </div>
               ) : isMobile ? (
-                <div style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
+                <div className="orders-cards-list" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
                   {subFilteredMy.map((tr) => renderMyOrderMobileCard(tr))}
                   {/* Unlinked merchant deals (same logic as desktop) */}
                   {(() => {
@@ -2504,7 +2681,7 @@ export default function OrdersPage() {
                   <div className="empty-s">{t('incomingTradesDesc')}</div>
                 </div>
               ) : isMobile ? (
-                <div style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
+                <div className="orders-cards-list" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
                   {subFilteredInDeals.map((deal) => renderOrdersMobileCard(deal, 'incoming'))}
                 </div>
               ) : (
@@ -2676,7 +2853,7 @@ export default function OrdersPage() {
                   <div className="empty-s">{t('outgoingTradesDesc')}</div>
                 </div>
               ) : isMobile ? (
-                <div style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
+                <div className="orders-cards-list" style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }}>
                   {subFilteredOutDeals.map((deal) => renderOrdersMobileCard(deal, 'outgoing'))}
                 </div>
               ) : (
@@ -2940,17 +3117,53 @@ export default function OrdersPage() {
 
           {/* ── MY ORDERS: New Sale Form ── */}
           {activeTab === 'my' && (
-            <div className="formPanel salePanel">
-              <div className="hdr">{t('newSale')}</div>
+            <div id="new-sale-form" className="formPanel salePanel">
+              <div className="hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{t('newSale')}</span>
+                {isMobile && <button onClick={() => setNewSaleSheetOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, color: 'var(--muted)', cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}>×</button>}
+              </div>
               <div className="inner" style={isMobile ? { paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))' } : undefined}>
                 {/* Normal sale form — hidden when Capital Transfer is selected */}
                 {!isCapitalTransfer && (<>
 
                 {/* Price mode toggle: FIFO vs Manual */}
-                <div className="bannerRow" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="bLbl">{t('avPrice')}</span>
-                    <span className="bVal">{priceMode === 'fifo' && wacop ? fmtP(wacop) : '—'}</span>
+                <div className="bannerRow" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                    {priceMode === 'fifo' ? (
+                      availableFifoUsdt > 0 ? (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                            <span className="bVal" style={{ fontSize: 16 }}>
+                              {saleDraft.quantityUsdt > 0 && Number.isFinite(fifoDisplayUnitCost)
+                                ? fmtP(fifoDisplayUnitCost as number)
+                                : '—'}
+                            </span>
+                            <span className="bLbl" style={{ fontSize: 9, opacity: 0.6 }}>FIFO</span>
+                          </div>
+                          {saleDraft.quantityUsdt > 0 && stockCoverage.stockShortfall > 0 && (
+                            <div style={{ fontSize: 10, color: 'var(--bad)', fontWeight: 700 }}>
+                              −{fmtU(stockCoverage.stockShortfall)} USDT
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => navigate('/trading/stock')}
+                          className="bVal"
+                          style={{ fontSize: 11, color: 'var(--accent)', background: 'none', border: '1px dashed var(--accent)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontWeight: 700, whiteSpace: 'nowrap' }}
+                        >
+                          + {t('addBatch') || 'Add Batches'}
+                        </button>
+                      )
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                        <span className="bVal" style={{ fontSize: 16 }}>
+                          {manualSellPrice ? fmtP(Number(manualSellPrice) || 0) : '—'}
+                        </span>
+                        <span className="bLbl" style={{ fontSize: 9, opacity: 0.6 }}>{t(getCurrencyLabel('sellPrice', activeSaleFiat as any))}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="modeToggle" style={{ fontSize: 9 }}>
                      <button type="button" className={priceMode === 'fifo' ? 'active' : ''} onClick={() => { setPriceMode('fifo'); setUseStock(true); }} style={mobileActionStyle}>{t('fifoLabel')}</button>
@@ -2967,7 +3180,7 @@ export default function OrdersPage() {
                   <div className="lbl">{t('inputMode')}</div>
                   <div className="modeToggle">
                     <button className={saleEntryMode === 'price_vol' ? 'active' : ''} type="button" onClick={() => setSaleEntryMode('price_vol')} style={mobileActionStyle}>{t('entryModePriceVol')}</button>
-                    <button className={saleEntryMode === 'qty_total' ? 'active' : ''} type="button" onClick={() => setSaleEntryMode('qty_total')} style={mobileActionStyle}>{t('entryModeUsdtQar')}</button>
+                    <button className={saleEntryMode === 'qty_total' ? 'active' : ''} type="button" onClick={() => setSaleEntryMode('qty_total')} style={mobileActionStyle}>{saleEntryModeLabel}</button>
                     <button className={saleEntryMode === 'qty_price' ? 'active' : ''} type="button" onClick={() => setSaleEntryMode('qty_price')} style={mobileActionStyle}>{t('entryModeUsdtPrice')}</button>
                   </div>
                 </div>
@@ -2975,16 +3188,16 @@ export default function OrdersPage() {
                 {saleEntryMode === 'price_vol' && (
                   <div className="g2tight">
                     <div className="field2">
-                      <div className="lbl">{saleMode === 'USDT' ? t('quantity') : t('amountQar')}</div>
+                      <div className="lbl">{t(getCurrencyLabel('amount', saleMode as any))}</div>
                       <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleAmount} onChange={numericOnly(setSaleAmount)} style={mobileInputStyle} /></div>
                       <div className="modeToggle" style={{ marginTop: 4, fontSize: 9 }}>
                         <button className={saleMode === 'USDT' ? 'active' : ''} type="button" onClick={() => setSaleMode('USDT')} style={mobileActionStyle}>USDT</button>
-                        <button className={saleMode === 'QAR' ? 'active' : ''} type="button" onClick={() => setSaleMode('QAR')} style={mobileActionStyle}>QAR</button>
+                        <button className={saleMode !== 'USDT' ? 'active' : ''} type="button" onClick={() => setSaleMode(baseFiat as 'QAR' | 'EGP')} style={mobileActionStyle}>{baseFiat}</button>
                       </div>
                     </div>
                     <div className="field2">
-                      <div className="lbl">{t('sellPriceLabel')}</div>
-                      <div className="inputBox"><input inputMode="decimal" placeholder={wacop ? fmtP(wacop) : '0.00'} value={saleSell} onChange={numericOnly(setSaleSell)} style={mobileInputStyle} /></div>
+                      <div className="lbl">{t(getCurrencyLabel('sellPrice', activeSaleFiat as any))}</div>
+                      <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleSell} onChange={numericOnly(setSaleSell)} style={mobileInputStyle} /></div>
                     </div>
                   </div>
                 )}
@@ -2996,11 +3209,11 @@ export default function OrdersPage() {
                       <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleUsdtQty} onChange={numericOnly(setSaleUsdtQty)} style={mobileInputStyle} /></div>
                     </div>
                     <div className="field2">
-                      <div className="lbl">{t('totalQarReceived')}</div>
+                      <div className="lbl">{totalReceivedLabel}</div>
                       <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleAmount} onChange={numericOnly(setSaleAmount)} style={mobileInputStyle} /></div>
                       {Number(saleUsdtQty) > 0 && Number(saleAmount) > 0 && (
                         <div style={{ fontSize: 9, color: 'var(--good)', marginTop: 2 }}>
-                          {t('autoCalcSellPrice')}: {fmtPrice(Number(saleAmount) / Number(saleUsdtQty))} QAR/USDT
+                          {t('autoCalcSellPrice')}: {fmtPrice(Number(saleAmount) / Number(saleUsdtQty))} {activeSaleFiat}/USDT
                         </div>
                       )}
                     </div>
@@ -3014,11 +3227,11 @@ export default function OrdersPage() {
                       <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleUsdtQty} onChange={numericOnly(setSaleUsdtQty)} style={mobileInputStyle} /></div>
                     </div>
                     <div className="field2">
-                      <div className="lbl">{t('sellPriceLabel')}</div>
-                      <div className="inputBox"><input inputMode="decimal" placeholder={wacop ? fmtP(wacop) : '0.00'} value={saleSell} onChange={numericOnly(setSaleSell)} style={mobileInputStyle} /></div>
+                      <div className="lbl">{t(getCurrencyLabel('sellPrice', activeSaleFiat as any))}</div>
+                      <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={saleSell} onChange={numericOnly(setSaleSell)} style={mobileInputStyle} /></div>
                       {Number(saleUsdtQty) > 0 && Number(saleSell) > 0 && (
                         <div style={{ fontSize: 9, color: 'var(--good)', marginTop: 2 }}>
-                          {t('autoCalcTotalQar')}: {fmtTotal(Number(saleUsdtQty) * Number(saleSell))} QAR
+                          {autoCalcTotalLabel}: {fmtTotal(Number(saleUsdtQty) * Number(saleSell))} {activeSaleFiat}
                         </div>
                       )}
                     </div>
@@ -3029,10 +3242,22 @@ export default function OrdersPage() {
                   <div className="g2tight">
                     <div className="field2">
                       <div className="lbl">{t('buyPrice')}</div>
-                      <div className="inputBox"><input inputMode="decimal" placeholder="0.00" value={manualBuyPrice} onChange={numericOnly(setManualBuyPrice)} style={mobileInputStyle} /></div>
+                      <div className={`inputBox ${needsManualBuyPrice ? 'manualPriceMissingBlink' : ''}`}>
+                        <input
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          value={manualBuyPrice}
+                          onChange={numericOnly(setManualBuyPrice)}
+                          style={{
+                            ...mobileInputStyle,
+                            color: needsManualBuyPrice ? 'var(--bad)' : undefined,
+                            fontWeight: needsManualBuyPrice ? 700 : undefined,
+                          }}
+                        />
+                      </div>
                     </div>
                     <div className="field2">
-                      <div className="lbl">{t('feeQarLabel') || 'Fee (QAR)'}</div>
+                      <div className="lbl">{feeLabel}</div>
                       <div className="inputBox"><input inputMode="decimal" placeholder="0" value={saleFee} onChange={numericOnly(setSaleFee)} style={mobileInputStyle} /></div>
                     </div>
                   </div>
@@ -3040,7 +3265,7 @@ export default function OrdersPage() {
 
                 {priceMode === 'fifo' && (
                   <div className="field2">
-                    <div className="lbl">{t('feeQarLabel') || 'Fee (QAR)'}</div>
+                    <div className="lbl">{feeLabel}</div>
                     <div className="inputBox"><input inputMode="decimal" placeholder="0" value={saleFee} onChange={numericOnly(setSaleFee)} style={mobileInputStyle} /></div>
                   </div>
                 )}
@@ -3161,7 +3386,7 @@ export default function OrdersPage() {
                                       family: val === 'profit_share_family' ? 'profit_share' : 'sales_deal',
                                       agreementId: null,
                                       agreementLabel: '',
-                                      allocatedUsdt: saleAmount || '',
+                                      allocatedUsdt: saleDraft.quantityUsdt > 0 ? String(saleDraft.quantityUsdt) : '',
                                       merchantCostPerUsdt: '',
                                       partnerSharePct: 0,
                                       merchantSharePct: 0,
@@ -3213,7 +3438,7 @@ export default function OrdersPage() {
                                             setAllocations(prev => {
                                               const base = prev[0] || {
                                                 id: `alloc_${Date.now()}`, relationshipId: linkedRelId, merchantName: cpName, merchantId: cpId,
-                                                family: 'profit_share' as const, allocatedUsdt: saleAmount || '', merchantCostPerUsdt: '', note: '',
+                                                family: 'profit_share' as const, allocatedUsdt: saleDraft.quantityUsdt > 0 ? String(saleDraft.quantityUsdt) : '', merchantCostPerUsdt: '', note: '',
                                               };
                                               return [{
                                                 ...base,
@@ -3272,7 +3497,12 @@ export default function OrdersPage() {
                                 <div className="lbl" style={{ fontSize: 9, marginBottom: 4 }}>{t('quickTemplate')}</div>
                                 <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
                                    <button type="button" className="btn secondary" style={{ fontSize: 9, padding: '4px 10px', flex: 1, border: allocations[0]?.partnerSharePct === 50 ? '1.5px solid var(--brand)' : undefined }}
-                                     onClick={() => setAllocations(prev => prev.map((a, i) => i === 0 ? { ...a, partnerSharePct: 50, merchantSharePct: 50, allocatedUsdt: saleAmount || a.allocatedUsdt } : a))}>{t('equalSplit')}
+                                     onClick={() => setAllocations(prev => prev.map((a, i) => i === 0 ? {
+                                       ...a,
+                                       partnerSharePct: 50,
+                                       merchantSharePct: 50,
+                                       allocatedUsdt: saleDraft.quantityUsdt > 0 ? String(saleDraft.quantityUsdt) : a.allocatedUsdt,
+                                     } : a))}>{t('equalSplit')}
                                   </button>
                                   <button type="button" className="btn secondary" style={{ fontSize: 9, padding: '4px 10px', flex: 1, border: allocations.length > 1 ? '1.5px solid var(--brand)' : undefined }}
                                     onClick={() => {
@@ -3477,8 +3707,8 @@ export default function OrdersPage() {
                               const alloc = allocations[0];
                               const usdt = parseFloat(alloc.allocatedUsdt) || 0;
                               const costPerUsdt = parseFloat(alloc.merchantCostPerUsdt) || (salePreview?.avgBuy ?? 0);
-                              const sellP = Number(saleSell) || 0;
-                              const totalFee = parseFloat(saleFee) || 0;
+                              const sellP = saleDraft.sellPriceQar;
+                              const totalFee = saleDraft.feeQar;
 
                               if (!(usdt > 0) || !(sellP > 0)) return null;
 
@@ -3582,17 +3812,28 @@ export default function OrdersPage() {
                 {allocationPreview && (
                   <div style={{ background: 'color-mix(in srgb, var(--brand) 8%, transparent)', borderRadius: 4, padding: '6px 8px', marginTop: 4 }}>
                     <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--brand)', marginBottom: 3 }}>{t('estimatedAllocation')}</div>
-                    <div className="prev-row"><span className="muted">{t('estSaleAmount')}</span><strong style={{ fontSize: 10 }}>{fmtC(allocationPreview.revenue)}</strong></div>
-                    {allocationPreview.fifoCost != null && <div className="prev-row"><span className="muted">{t('estFifoCost')}</span><strong style={{ fontSize: 10 }}>{fmtC(allocationPreview.fifoCost)}</strong></div>}
-                    {allocationPreview.baseLabel === 'net_profit' && (
-                      <div className="prev-row"><span className="muted">{t('estNetProfit')}</span><strong style={{ fontSize: 10, color: allocationPreview.base >= 0 ? 'var(--good)' : 'var(--bad)' }}>{allocationPreview.base >= 0 ? '+' : ''}{fmtC(allocationPreview.base)}</strong></div>
+                    {'incomplete' in allocationPreview ? (
+                      <div style={{ fontSize: 10, color: 'var(--bad)', lineHeight: 1.5 }}>
+                        <div><strong>⚠️ {t('fifoCoverageIncomplete')}</strong></div>
+                        <div>{t('coveredQtyLabel')}: {fmtU(allocationPreview.coveredQty)} USDT</div>
+                        <div>{t('uncoveredQtyLabel')}: {fmtU(allocationPreview.uncoveredQty)} USDT</div>
+                        <div style={{ fontSize: 9, color: 'var(--muted)', marginTop: 2 }}>{t('allocationNetWithheld')}</div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="prev-row"><span className="muted">{t('estSaleAmount')}</span><strong style={{ fontSize: 10 }}>{fmtC(allocationPreview.revenue)}</strong></div>
+                        {allocationPreview.fifoCost != null && <div className="prev-row"><span className="muted">{t('estFifoCost')}</span><strong style={{ fontSize: 10 }}>{fmtC(allocationPreview.fifoCost)}</strong></div>}
+                        {allocationPreview.baseLabel === 'net_profit' && (
+                          <div className="prev-row"><span className="muted">{t('estNetProfit')}</span><strong style={{ fontSize: 10, color: allocationPreview.base >= 0 ? 'var(--good)' : 'var(--bad)' }}>{allocationPreview.base >= 0 ? '+' : ''}{fmtC(allocationPreview.base)}</strong></div>
+                        )}
+                        {/* Iconic profit split summary */}
+                        <div style={{ borderTop: '1px solid color-mix(in srgb, var(--brand) 15%, transparent)', paddingTop: 5, marginTop: 4 }}>
+                          <div className="prev-row"><span style={{ fontWeight: 700, color: 'var(--good)', fontSize: 10 }}>📊 {t('merchantNetProfit')}</span><strong style={{ color: 'var(--good)', fontSize: 11 }}>{fmtC(allocationPreview.merchantAmount)}</strong></div>
+                          <div className="prev-row"><span style={{ fontWeight: 700, color: 'var(--bad)', fontSize: 10 }}>🛡️ {t('partnerNetProfit')} ({allocationPreview.counterpartyName})</span><strong style={{ color: 'var(--bad)', fontSize: 11 }}>{fmtC(allocationPreview.partnerAmount)}</strong></div>
+                        </div>
+                        <div style={{ fontSize: 8, color: 'var(--muted)', marginTop: 3 }}>{t('tradeWillBeSentForApproval')}</div>
+                      </>
                     )}
-                    {/* Iconic profit split summary */}
-                    <div style={{ borderTop: '1px solid color-mix(in srgb, var(--brand) 15%, transparent)', paddingTop: 5, marginTop: 4 }}>
-                      <div className="prev-row"><span style={{ fontWeight: 700, color: 'var(--good)', fontSize: 10 }}>📊 {t('merchantNetProfit')}</span><strong style={{ color: 'var(--good)', fontSize: 11 }}>{fmtC(allocationPreview.merchantAmount)}</strong></div>
-                      <div className="prev-row"><span style={{ fontWeight: 700, color: 'var(--bad)', fontSize: 10 }}>🛡️ {t('partnerNetProfit')} ({allocationPreview.counterpartyName})</span><strong style={{ color: 'var(--bad)', fontSize: 11 }}>{fmtC(allocationPreview.partnerAmount)}</strong></div>
-                    </div>
-                    <div style={{ fontSize: 8, color: 'var(--muted)', marginTop: 3 }}>{t('tradeWillBeSentForApproval')}</div>
                   </div>
                 )}
 
@@ -3602,10 +3843,87 @@ export default function OrdersPage() {
                   <div className="pt">{t('livePreview')}</div>
                   {!salePreview ? <div className="muted" style={{ fontSize: 11 }}>{t('enterDetails')}</div> : (
                     <>
+                      {isInsufficientStock && (
+                        <div style={{
+                          marginBottom: 6,
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          border: '1px solid color-mix(in srgb, var(--bad) 45%, transparent)',
+                          background: 'color-mix(in srgb, var(--bad) 10%, transparent)',
+                          color: 'var(--bad)',
+                          fontSize: 10,
+                          lineHeight: 1.45,
+                        }}>
+                          <div style={{ fontWeight: 800, marginBottom: 2 }}>{t('insufficientStockTitle')}</div>
+                          <div>{t('orderExceedsStockBy').replace('{qty}', fmtU(stockCoverage.stockShortfall))} <strong>USDT</strong>.</div>
+                          <div>{t('fifoCannotFullyPrice')}</div>
+                          <div>{t('toContinueEither')}</div>
+                          <ul style={{ margin: '2px 0 0 14px', padding: 0 }}>
+                            <li>{t('addStockFirst')}</li>
+                            <li>{t('enableManualSellPriceOverride')}</li>
+                          </ul>
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                            <button type="button" className="btn secondary" style={{ fontSize: 10, padding: '4px 10px' }} onClick={() => navigate('/trading/stock')}>
+                              {t('addStockCta')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn secondary"
+                              style={{ fontSize: 10, padding: '4px 10px', borderColor: stockOverrideEnabled ? 'var(--bad)' : undefined }}
+                              onClick={() => {
+                                setStockOverrideEnabled(true);
+                                setStockOverrideConfirmed(false);
+                              }}
+                            >
+                              {t('useManualSellPriceCta')}
+                            </button>
+                          </div>
+                          {stockOverrideEnabled && (
+                            <label style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', fontSize: 9, color: 'var(--t1)' }}>
+                              <input
+                                type="checkbox"
+                                checked={stockOverrideConfirmed}
+                                onChange={e => {
+                                  const checked = e.target.checked;
+                                  setStockOverrideConfirmed(checked);
+                                  if (checked) {
+                                    setPriceMode('manual');
+                                    setUseStock(false);
+                                  }
+                                }}
+                                style={{ accentColor: 'var(--bad)' }}
+                              />
+                              {t('stockOverrideConfirm')}
+                            </label>
+                          )}
+                        </div>
+                      )}
                       {Number.isFinite(salePreview.avgBuy) && <div className="prev-row"><span className="muted">{t('avgBuy')}</span><strong style={{ color: 'var(--bad)' }}>{fmtP(salePreview.avgBuy)} QAR</strong></div>}
                       <div className="prev-row"><span className="muted">{t('qty')}</span><strong>{fmtU(salePreview.qty)} USDT</strong></div>
                       <div className="prev-row"><span className="muted">{t('revenue')}</span><strong>{fmtC(salePreview.revenue)}</strong></div>
+                      {isInsufficientStock && (
+                        <>
+                          <div className="prev-row"><span className="muted">{t('coveredFifoQty')}</span><strong>{fmtU(salePreview.coveredQty || 0)} USDT</strong></div>
+                          <div className="prev-row"><span className="muted">{t('uncoveredQty')}</span><strong style={{ color: 'var(--bad)' }}>{fmtU(salePreview.uncoveredQty || 0)} USDT</strong></div>
+                          <div style={{ fontSize: 9, color: 'var(--warn)', marginBottom: 4 }}>
+                            {t('netIncompleteUncovered')}
+                          </div>
+                        </>
+                      )}
                       <div className="prev-row"><span className="muted">{t('costFifo')}</span><strong>{Number.isFinite(salePreview.cost) ? fmtC(salePreview.cost) : '—'}</strong></div>
+                      {salePreview.consumed.length > 0 && (
+                        <div style={{ marginTop: 6, marginBottom: 4 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 4 }}>
+                            {t('fifoSlices')}
+                          </div>
+                          {salePreview.consumed.map((row, idx) => (
+                            <div key={`${row.layerId}-${idx}`} className="prev-row" style={{ fontSize: 10 }}>
+                              <span className="muted">#{idx + 1} · {row.layerId.slice(0, 8)}</span>
+                              <strong>{fmtU(row.qty)} @ {fmtP(row.buyPrice)} = {fmtC(row.cost)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="prev-row" style={{ borderTop: '1px solid color-mix(in srgb,var(--brand) 20%,transparent)', paddingTop: 5 }}>
                         <span className="muted">{t('net')}</span>
                         <strong style={{ color: Number.isFinite(salePreview.net) ? (salePreview.net >= 0 ? 'var(--good)' : 'var(--bad)') : 'var(--muted)' }}>
@@ -3734,9 +4052,9 @@ export default function OrdersPage() {
 
                 <div
                   className="formActions"
-                  style={isMobile ? { position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))', zIndex: 20 } : undefined}
+                  style={isMobile ? { position: 'static', background: 'var(--panel)', paddingTop: 8, paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))', zIndex: 20 } : undefined}
                 >
-                  <button className="btn" onClick={addTrade} style={isMobile ? { width: '100%', minHeight: 40, fontSize: 12 } : undefined}>
+                  <button className="btn" onClick={addTrade} disabled={!canSubmitSale} style={isMobile ? { width: '100%', minHeight: 44, fontSize: 13 } : undefined}>
                     {merchantOrderEnabled ? t('sendForApproval') : t('addTrade')}
                   </button>
                 </div>
@@ -3996,14 +4314,14 @@ export default function OrdersPage() {
                   <div className="inputBox"><input inputMode="decimal" value={editQty} onChange={numericOnly(setEditQty)} disabled={isApproved} style={mobileInputStyle} /></div>
                 </div>
                 <div className="field2">
-                  <div className="lbl">{t('sellPriceQar')}</div>
+                  <div className="lbl">{t(getCurrencyLabel('sellPrice', activeSaleFiat as any))}</div>
                   <div className="inputBox"><input inputMode="decimal" value={editSell} onChange={numericOnly(setEditSell)} disabled={isApproved} style={mobileInputStyle} /></div>
                 </div>
               </div>
 
               <div className="g2tight" style={{ marginBottom: 10 }}>
                 <div className="field2">
-                  <div className="lbl">{t('feeQarLabel')}</div>
+                  <div className="lbl">{feeLabel}</div>
                   <div className="inputBox"><input inputMode="decimal" value={editFee} onChange={numericOnly(setEditFee)} disabled={isApproved} style={mobileInputStyle} /></div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 6, gap: 10 }}>
@@ -4446,13 +4764,13 @@ export default function OrdersPage() {
                   <div className="inputBox"><input inputMode="decimal" value={editDealQty} onChange={numericOnly(setEditDealQty)} style={mobileInputStyle} /></div>
                 </div>
                 <div className="field2">
-                  <div className="lbl">{t('sellPriceQar')}</div>
+                  <div className="lbl">{t(getCurrencyLabel('sellPrice', baseFiat as any))}</div>
                   <div className="inputBox"><input inputMode="decimal" value={editDealSell} onChange={numericOnly(setEditDealSell)} style={mobileInputStyle} /></div>
                 </div>
               </div>
 
               <div className="field2" style={{ marginBottom: 10 }}>
-                <div className="lbl">{t('feeQarLabel')}</div>
+                <div className="lbl">{baseFiat === 'EGP' ? t('feeEgpLabel') : t('feeQarLabel')}</div>
                 <div className="inputBox"><input inputMode="decimal" value={editDealFee} onChange={numericOnly(setEditDealFee)} style={mobileInputStyle} /></div>
               </div>
 
@@ -4510,6 +4828,33 @@ export default function OrdersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Sale Sheet Backdrop ── */}
+      {isMobile && newSaleSheetOpen && (
+        <div className="sale-sheet-backdrop" onClick={() => setNewSaleSheetOpen(false)} />
+      )}
+
+      {/* ── FAB: open New Sale sheet (mobile only) ── */}
+      {isMobile && activeTab === 'my' && (
+        <button
+          onClick={() => setNewSaleSheetOpen(true)}
+          title="New Sale"
+          style={{
+            position: 'fixed', bottom: 'max(76px, calc(64px + env(safe-area-inset-bottom, 0px)))', right: 16,
+            zIndex: 40, width: 48, height: 48, borderRadius: '50%',
+            background: 'var(--brand)', color: 'var(--bg)',
+            border: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 16px var(--glow), 0 2px 6px rgba(0,0,0,0.4)',
+            fontSize: 26, lineHeight: 1, fontWeight: 400,
+            transition: 'transform 0.15s, box-shadow 0.15s',
+          }}
+          onPointerDown={e => (e.currentTarget.style.transform = 'scale(0.92)')}
+          onPointerUp={e => (e.currentTarget.style.transform = '')}
+        >
+          +
+        </button>
+      )}
 
     </div>
   );
