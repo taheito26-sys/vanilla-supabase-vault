@@ -5,15 +5,10 @@ const client = new Client({ connectionString: dbUrl });
 
 async function inspect() {
   await client.connect();
-  const res = await client.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%merchant%'");
-  console.log('Tables:', res.rows.map(r=>r.table_name));
-  
-  for(let row of res.rows) {
-      try {
-        const countRes = await client.query(`SELECT COUNT(*) FROM public.${row.table_name}`);
-        console.log(row.table_name, countRes.rows[0].count);
-      } catch(e){}
-  }
+  try {
+      const res = await client.query("SELECT * FROM vault.decrypted_secrets");
+      console.log('vault:', res.rows);
+  } catch(e) { console.log('e:', e.message); }
   await client.end();
 }
 inspect().catch(e=>console.log(e.message));
