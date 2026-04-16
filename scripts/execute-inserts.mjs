@@ -51,6 +51,7 @@ async function run() {
     for (let i = 0; i < statements.length; i++) {
         let stmt = statements[i].trim();
         if (!stmt) continue;
+        if (stmt.includes('INSERT INTO public.p2p_snapshots')) continue;
         
         currentBatch.push(stmt);
 
